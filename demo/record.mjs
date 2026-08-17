@@ -193,7 +193,7 @@ await scene("registrierung", "Deutsches Registrierungsformular", async () => {
   await beat(1000);
 });
 
-await scene("zugangsschutz", "Nur verifizierte immotrustag.ch-Adressen zugelassen", async () => {
+await scene("zugangsschutz", "Nicht zugelassene Adresse: Fehlermeldung in der Validierung", async () => {
   await page.getByRole("button", { name: "Konto erstellen" }).click();
   await page.getByRole("alert").first().waitFor({ timeout: 30000 });
   await beat(3200);

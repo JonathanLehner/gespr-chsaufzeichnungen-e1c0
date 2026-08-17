@@ -132,7 +132,7 @@ export default function Home() {
               <ul className="mt-5 space-y-4 text-[13px] leading-relaxed text-ink-soft">
                 <li>
                   <strong className="font-semibold text-ink">Mitarbeitende</strong> registrieren sich
-                  mit ihrer Adresse @immotrustag.ch, bestätigen die E-Mail-Adresse und sehen danach
+                  mit ihrer Geschäftsadresse, bestätigen die E-Mail-Adresse und sehen danach
                   sämtliche freigegebenen Aufnahmen.
                 </li>
                 <li>

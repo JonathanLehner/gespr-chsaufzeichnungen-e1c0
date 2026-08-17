@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { PublicFooter } from "@/components/brand";
-import { Wordmark } from "@/components/brand";
+import { Logo, PublicFooter, Wordmark } from "@/components/brand";
 import { IMAGES } from "@/lib/media";
 
 export function AuthShell({
@@ -46,13 +45,15 @@ export function AuthShell({
               className="h-auto w-full"
               style={{ aspectRatio: `${image.width} / ${image.height}` }}
             />
-            <div className="border-t border-line bg-surface p-5">
-              <h2 className="text-[13px] font-semibold text-ink">Hinweis zum Zugang</h2>
-              <p className="mt-2 text-[12px] leading-relaxed text-ink-soft">
-                Zugelassen sind ausschliesslich E-Mail-Adressen der Domain @immotrustag.ch sowie die
-                Adresse des Superusers. Die E-Mail-Adresse muss vor der ersten Anmeldung bestätigt
-                werden.
-              </p>
+            <div className="flex items-start gap-3 border-t border-line bg-surface p-5">
+              <Logo size={28} className="mt-0.5 shrink-0 rounded-[7px]" />
+              <div>
+                <h2 className="text-[13px] font-semibold text-ink">Gesprächsaufzeichnungen</h2>
+                <p className="mt-2 text-[12px] leading-relaxed text-ink-soft">
+                  Aufnahmen der Verkaufsgespräche zentral ablegen, automatisch transkribieren,
+                  durchsuchen, anhören und bewerten – für das gesamte Verkaufsteam.
+                </p>
+              </div>
             </div>
           </aside>
         </div>

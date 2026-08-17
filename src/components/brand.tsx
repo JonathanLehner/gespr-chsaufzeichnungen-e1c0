@@ -1,16 +1,28 @@
 import Link from "next/link";
 
+export const LOGO_SRC = "/marke/immotrust-logo.svg";
+
+/** Bildmarke der Immotrust AG. */
+export function Logo({ size = 28, className = "" }: { size?: number; className?: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- Vektorlogo, eine Optimierung zur Laufzeit ist weder nötig noch erwünscht.
+    <img
+      src={LOGO_SRC}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden
+      decoding="async"
+      className={className}
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
 export function Wordmark({ compact = false }: { compact?: boolean }) {
   return (
     <span className="inline-flex items-center gap-2.5">
-      <span
-        aria-hidden
-        className="flex h-7 w-7 items-center justify-center rounded-[5px] bg-petrol text-white"
-      >
-        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M4 13v-2M8 16V8M12 19V5M16 16V8M20 13v-2" strokeLinecap="round" />
-        </svg>
-      </span>
+      <Logo size={28} className="rounded-[7px]" />
       <span className="leading-tight">
         <span className="block text-[13px] font-semibold tracking-tight text-ink">Immotrust AG</span>
         {!compact && (
@@ -45,8 +57,11 @@ export function PublicFooter() {
   return (
     <footer className="border-t border-line bg-surface">
       <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-6 text-[12px] text-ink-faint sm:flex-row sm:items-center sm:justify-between">
-        <p>Immotrust AG · Interne Anwendung für Gesprächsaufzeichnungen</p>
-        <p>Zugang ausschliesslich für Mitarbeitende mit Adresse @immotrustag.ch</p>
+        <p className="flex items-center gap-2">
+          <Logo size={18} className="rounded-[4px]" />
+          Immotrust AG · Interne Anwendung für Gesprächsaufzeichnungen
+        </p>
+        <p>© Immotrust AG</p>
       </div>
     </footer>
   );

@@ -20,11 +20,22 @@ function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: st
   );
 }
 
+const NOTICE_ID = "auth-hinweis";
+
+/** Markiert das E-Mail-Feld, wenn sich der Validierungsfehler darauf bezieht. */
+function invalidEmail(state: AuthState) {
+  const invalid = state.status === "fehler" && state.field === "email";
+  return {
+    "aria-invalid": invalid || undefined,
+    "aria-describedby": invalid ? NOTICE_ID : undefined,
+  } as const;
+}
+
 function StateNotice({ state }: { state: AuthState }) {
   if (state.status === "leer" || !state.message) return null;
   const isError = state.status === "fehler";
   return (
-    <div className={`notice ${isError ? "notice-error" : "notice-ok"} mb-4`} role="alert">
+    <div id={NOTICE_ID} className={`notice ${isError ? "notice-error" : "notice-ok"} mb-4`} role="alert">
       <p>{state.message}</p>
       {state.link && (
         <p className="mt-2 border-t border-current/20 pt-2 text-[12px]">
@@ -57,6 +68,7 @@ export function LoginForm() {
           required
           className="field"
           placeholder="vorname.nachname@immotrustag.ch"
+          {...invalidEmail(state)}
         />
       </div>
       <div>
@@ -109,6 +121,7 @@ export function RegisterForm() {
           required
           className="field"
           placeholder="vorname.nachname@immotrustag.ch"
+          {...invalidEmail(state)}
         />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -165,6 +178,7 @@ export function RequestResetForm() {
           required
           className="field"
           placeholder="vorname.nachname@immotrustag.ch"
+          {...invalidEmail(state)}
         />
       </div>
       <SubmitButton label="Link zum Zurücksetzen erzeugen" pendingLabel="Wird erzeugt …" />

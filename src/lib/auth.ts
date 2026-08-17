@@ -30,9 +30,9 @@ export function emailAllowed(email: string): boolean {
   return Boolean(local) && domain === ALLOWED_DOMAIN;
 }
 
+/** Erscheint ausschliesslich als Validierungsfehler im Formular. */
 export const EMAIL_NOT_ALLOWED_MESSAGE =
-  `Diese E-Mail-Adresse ist nicht zugelassen. Erlaubt sind ausschliesslich Adressen der Domain ` +
-  `@${ALLOWED_DOMAIN} sowie ${SUPERUSER_EMAIL}.`;
+  "Diese E-Mail-Adresse ist nicht zugelassen. Bitte verwenden Sie Ihre geschäftliche E-Mail-Adresse.";
 
 /* ----------------------------------------------------------------- Tokens */
 

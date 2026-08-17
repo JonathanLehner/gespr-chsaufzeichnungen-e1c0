@@ -11,7 +11,7 @@ export default function RegistrierenPage() {
   return (
     <AuthShell
       title="Konto erstellen"
-      intro="Die Registrierung steht Mitarbeitenden mit einer Adresse @immotrustag.ch offen. Nach dem Anlegen bestätigen Sie Ihre E-Mail-Adresse und können sich danach anmelden."
+      intro="Nach dem Anlegen bestätigen Sie Ihre E-Mail-Adresse und können sich danach anmelden."
       footer={
         <span className="text-ink-soft">
           Bereits registriert?{" "}

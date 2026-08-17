@@ -114,7 +114,7 @@ export async function registerAction(_prev: AuthState, formData: FormData): Prom
     return { status: "fehler", message: "Bitte füllen Sie alle Pflichtfelder aus.", email, name };
   }
   if (!emailAllowed(email)) {
-    return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email, name };
+    return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email, name, field: "email" };
   }
   if (password !== passwordRepeat) {
     return { status: "fehler", message: "Die beiden Passwörter stimmen nicht überein.", email, name };
@@ -157,7 +157,7 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
     return { status: "fehler", message: "Bitte E-Mail-Adresse und Passwort eingeben.", email };
   }
   if (!emailAllowed(email)) {
-    return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email };
+    return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email, field: "email" };
   }
 
   const user = await findById<User>(Collections.users, email);
@@ -217,7 +217,7 @@ export async function verifyEmailAction(token: string): Promise<AuthState> {
 export async function requestResetAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const email = normalizeEmail(String(formData.get("email") ?? ""));
   if (!emailAllowed(email)) {
-    return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email };
+    return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email, field: "email" };
   }
   const user = await findById<User>(Collections.users, email);
   if (!user) {

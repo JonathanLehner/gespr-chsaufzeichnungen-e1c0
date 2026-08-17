@@ -82,6 +82,11 @@
     color: var(--color-ink-faint);
   }
 
+  .field[aria-invalid="true"] {
+    border-color: #d08b81;
+    background: #fdf5f4;
+  }
+
   .field:disabled {
     background: #f6f8fa;
     color: var(--color-ink-faint);
