@@ -1,0 +1,232 @@
+"use server";
+
+import { randomUUID } from "node:crypto";
+import { revalidatePath } from "next/cache";
+import { requireUser } from "@/lib/auth";
+import { Collections, findById, findMany, insertOne, upsertById } from "@/lib/db";
+import {
+  getRecording,
+  invalidateRecordingCache,
+  recordingIdFor,
+  refreshRatingSummary,
+  setDeletionFlag,
+} from "@/lib/recordings";
+import { runPendingJobs } from "@/lib/transcription";
+import { getTemplateSettings } from "@/lib/settings";
+import { parseFilename } from "@/lib/filename-template";
+import { mimeFromExtension, fingerprintOf, MAX_UPLOAD_BYTES } from "@/lib/audio";
+import type { Rating, Recording, TranscriptionStatus } from "@/lib/types";
+
+export type ActionResult = { ok: boolean; message: string };
+
+/* ------------------------------------------------------- Upload-Vorbereitung */
+
+export type FileCandidate = { name: string; size: number };
+
+export type PreparedFile = {
+  name: string;
+  size: number;
+  ok: boolean;
+  problem: string | null;
+  duplicate: boolean;
+  metadata: {
+    callerName: string;
+    callerFirstName: string;
+    callerLastName: string;
+    phoneNumber: string;
+    callNumber: string;
+    callAtUtc: string;
+  } | null;
+};
+
+export type PreparedUpload = {
+  template: string;
+  templateVersion: number;
+  files: PreparedFile[];
+};
+
+/** Liest die Metadaten aller ausgewählten Dateien aus den Dateinamen. */
+export async function prepareUploadAction(candidates: FileCandidate[]): Promise<PreparedUpload> {
+  await requireUser();
+  const settings = await getTemplateSettings();
+
+  const ids = candidates.map((candidate) => recordingIdFor(fingerprintOf(candidate.name, candidate.size)));
+  const existing =
+    ids.length > 0 ? await findMany<Recording>(Collections.recordings, { _id: { $in: ids } }) : [];
+  const existingIds = new Set(existing.map((row) => row._id));
+
+  const files: PreparedFile[] = candidates.map((candidate) => {
+    const id = recordingIdFor(fingerprintOf(candidate.name, candidate.size));
+    const duplicate = existingIds.has(id);
+    const mime = mimeFromExtension(candidate.name);
+    if (!mime) {
+      return {
+        name: candidate.name,
+        size: candidate.size,
+        ok: false,
+        problem: "Nicht unterstütztes Dateiformat. Zulässig sind ausschliesslich WAV und MP3.",
+        duplicate,
+        metadata: null,
+      };
+    }
+    if (candidate.size > MAX_UPLOAD_BYTES) {
+      return {
+        name: candidate.name,
+        size: candidate.size,
+        ok: false,
+        problem: "Die Datei ist grösser als 50 MB und kann nicht hochgeladen werden.",
+        duplicate,
+        metadata: null,
+      };
+    }
+    if (candidate.size === 0) {
+      return {
+        name: candidate.name,
+        size: candidate.size,
+        ok: false,
+        problem: "Die Datei ist leer.",
+        duplicate,
+        metadata: null,
+      };
+    }
+    const parsed = parseFilename(candidate.name, settings.template);
+    if (!parsed.ok) {
+      return {
+        name: candidate.name,
+        size: candidate.size,
+        ok: false,
+        problem: parsed.error,
+        duplicate,
+        metadata: null,
+      };
+    }
+    return {
+      name: candidate.name,
+      size: candidate.size,
+      ok: !duplicate,
+      problem: duplicate ? "Diese Datei wurde bereits hochgeladen." : null,
+      duplicate,
+      metadata: parsed.data,
+    };
+  });
+
+  return { template: settings.template, templateVersion: settings.version, files };
+}
+
+/* --------------------------------------------------------------- Statusabruf */
+
+export type StatusUpdate = {
+  id: string;
+  status: TranscriptionStatus;
+  error: string | null;
+  wordCount: number | null;
+  speakerCount: number | null;
+};
+
+/**
+ * Liefert den aktuellen Transkriptionsstatus und stösst dabei offene Aufträge
+ * an. Die Oberfläche fragt nur so lange nach, wie Aufträge offen sind.
+ */
+export async function transcriptionStatusAction(ids: string[]): Promise<StatusUpdate[]> {
+  await requireUser();
+  if (ids.length === 0) return [];
+  const rows = await findMany<Recording>(Collections.recordings, { _id: { $in: ids.slice(0, 100) } });
+  const pending = rows.some(
+    (row) => row.transcriptionStatus === "wartend" || row.transcriptionStatus === "in_arbeit",
+  );
+  if (pending) {
+    await runPendingJobs(1);
+    const refreshed = await findMany<Recording>(Collections.recordings, {
+      _id: { $in: ids.slice(0, 100) },
+    });
+    return refreshed.map(toStatusUpdate);
+  }
+  return rows.map(toStatusUpdate);
+}
+
+function toStatusUpdate(row: Recording): StatusUpdate {
+  return {
+    id: row._id,
+    status: row.transcriptionStatus,
+    error: row.transcriptionError,
+    wordCount: row.wordCount,
+    speakerCount: row.speakerCount,
+  };
+}
+
+/* ----------------------------------------------------------- Löschmarkierung */
+
+export async function toggleDeletionFlagAction(
+  recordingId: string,
+  flagged: boolean,
+  reason: string,
+): Promise<ActionResult> {
+  const user = await requireUser();
+  const recording = await getRecording(recordingId);
+  if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
+
+  await setDeletionFlag(recordingId, flagged, user.email, reason);
+  revalidatePath("/aufnahmen");
+  revalidatePath(`/aufnahmen/${recordingId}`);
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    message: flagged
+      ? "Die Aufnahme ist zur Löschung markiert. Die Daten bleiben bis zur Freigabe durch die Administration erhalten."
+      : "Die Löschmarkierung wurde aufgehoben.",
+  };
+}
+
+/* ------------------------------------------------------------- Kommentare */
+
+export async function addCommentAction(recordingId: string, text: string): Promise<ActionResult> {
+  const user = await requireUser();
+  const trimmed = text.trim();
+  if (trimmed.length < 2) return { ok: false, message: "Bitte geben Sie einen Kommentartext ein." };
+  if (trimmed.length > 4000) return { ok: false, message: "Der Kommentar ist zu lang (max. 4000 Zeichen)." };
+
+  const recording = await getRecording(recordingId);
+  if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
+
+  await insertOne(Collections.comments, {
+    _id: randomUUID(),
+    recordingId,
+    text: trimmed,
+    authorEmail: user.email,
+    authorName: user.name,
+    createdAt: new Date().toISOString(),
+  });
+  revalidatePath(`/aufnahmen/${recordingId}`);
+  return { ok: true, message: "Kommentar gespeichert." };
+}
+
+/* ------------------------------------------------------------ Bewertungen */
+
+export async function setRatingAction(recordingId: string, score: number): Promise<ActionResult> {
+  const user = await requireUser();
+  if (!Number.isInteger(score) || score < 1 || score > 10) {
+    return { ok: false, message: "Bitte wählen Sie eine Bewertung zwischen 1 und 10." };
+  }
+  const recording = await getRecording(recordingId);
+  if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
+
+  const id = `${recordingId}:${user.email}`;
+  const existing = await findById<Rating>(Collections.ratings, id);
+  const now = new Date().toISOString();
+  await upsertById(Collections.ratings, id, {
+    recordingId,
+    score,
+    authorEmail: user.email,
+    authorName: user.name,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+  await refreshRatingSummary(recordingId);
+  invalidateRecordingCache();
+  revalidatePath(`/aufnahmen/${recordingId}`);
+  revalidatePath("/aufnahmen");
+  return {
+    ok: true,
+    message: existing ? "Ihre Bewertung wurde aktualisiert." : "Bewertung gespeichert.",
+  };
+}

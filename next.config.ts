@@ -1,7 +1,10 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Das Projektverzeichnis ist die Wurzel; ausserhalb liegende Lockfiles
+  // sollen die Auflösung nicht beeinflussen.
+  turbopack: { root: path.resolve(".") },
 };
 
 export default nextConfig;
