@@ -46,7 +46,7 @@ export function AuthShell({
               style={{ aspectRatio: `${image.width} / ${image.height}` }}
             />
             <div className="flex items-start gap-3 border-t border-line bg-surface p-5">
-              <Logo size={28} className="mt-0.5 shrink-0 rounded-[7px]" />
+              <Logo size={28} className="mt-0.5 shrink-0" />
               <div>
                 <h2 className="text-[13px] font-semibold text-ink">Gesprächsaufzeichnungen</h2>
                 <p className="mt-2 text-[12px] leading-relaxed text-ink-soft">

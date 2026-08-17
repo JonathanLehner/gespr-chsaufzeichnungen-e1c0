@@ -78,7 +78,8 @@ Die Passwörter sind vor dem produktiven Einsatz zu ändern.
 npm run build
 npm run start -- -p 3010
 
-node scripts/browser-check.mjs   # 66 Prüfungen im echten Browser
+node scripts/browser-check.mjs   # vollständiger Funktionsdurchlauf im echten Browser
+node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
 npx tsx --env-file=.env.local --conditions=react-server scripts/cleanup-testdata.mts
 ```
@@ -88,6 +89,22 @@ Suche, Filtern, Sortierung und Seitennavigation, die Detailansicht mit Player un
 Sammelupload inklusive Drag-and-drop und Korrektur-Modal sowie das gesamte Admin-Dashboard bis zur
 endgültigen Löschung. `cleanup-testdata.mts` entfernt anschliessend die dabei entstandenen
 Testkonten, Testaufnahmen, Kommentare und Bewertungen.
+
+Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.
+
+## Auslieferung
+
+Die Anwendung läuft als Cloudflare Worker (`@opennextjs/cloudflare`, Konfiguration in
+`wrangler.jsonc` und `open-next.config.ts`).
+
+```bash
+npx opennextjs-cloudflare build     # führt npm run build aus und bündelt den Worker
+npx wrangler dev --port 8788        # Worker lokal prüfen (Variablen aus .dev.vars)
+npx wrangler deploy                 # Ausliefern
+```
+
+`CLAWCORP_API_KEY` und `AUTH_SECRET` liegen als Worker-Secrets (`npx wrangler secret put NAME`),
+lokal in `.dev.vars`.
 
 ## Technische Entscheidungen
 
@@ -113,3 +130,12 @@ Testkonten, Testaufnahmen, Kommentare und Bewertungen.
   Läufe erzeugen. Hängengebliebene Aufträge werden nach zehn Minuten wieder aufgenommen.
 - **E-Mail**: In dieser Umgebung ist kein Versand konfiguriert. Bestätigungs- und Reset-Links werden
   direkt in der Oberfläche angezeigt und im Admin-Dashboard protokolliert.
+- **Produktionsbuild mit webpack**: `npm run build` läuft mit `next build --webpack`. Der
+  Turbopack-Build legt den Servercode in nachgeladenen Chunks ab; `@opennextjs/cloudflare` bindet
+  diese Chunks nur ein, wenn die Pfade der Bauumgebung Schrägstriche verwenden. Unter Windows
+  entstand dadurch ein Worker, dessen Chunk-Auflösung leer blieb und der jede Seite mit
+  „Internal Server Error“ (`ChunkLoadError`) beantwortete. Der webpack-Build erzeugt ein
+  eigenständiges Bundle und ist damit unabhängig von der Bauplattform.
+- **Bildmarke**: `public/logo.png` ist die unveränderte Marke des Kunden. `scripts/generate-logo-assets.mjs`
+  erzeugt daraus zur Bauzeit die Anzeigevariante `public/marke/logo-112.webp` sowie `favicon.ico`,
+  `icon.png` (128 px) und `apple-icon.png` (180 px, weisser Grund für iOS).

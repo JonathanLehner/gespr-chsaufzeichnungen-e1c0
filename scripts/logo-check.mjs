@@ -37,7 +37,7 @@ const record = (name, ok, detail = "") => results.push(`${ok ? "OK  " : "FAIL"} 
 
 for (const path of ["/", "/anmelden", "/registrieren", "/passwort-vergessen"]) {
   await page.goto(BASE + path, { waitUntil: "networkidle" });
-  const logos = await page.locator('img[src="/marke/immotrust-logo.svg"]').count();
+  const logos = await page.locator('img[src="/marke/logo-112.webp"]').count();
   record(`Logo auf ${path}`, logos > 0, `${logos} Vorkommen`);
   const body = await page.locator("body").innerText();
   const leaks = ["@immotrustag.ch offen", "Zugang ausschliesslich", "Adresse des Superusers", "Erlaubt sind ausschliesslich"]
@@ -45,7 +45,7 @@ for (const path of ["/", "/anmelden", "/registrieren", "/passwort-vergessen"]) {
   record(`Keine Zugangs-Werbetexte auf ${path}`, leaks.length === 0, leaks.join(" | "));
 }
 
-for (const asset of ["/marke/immotrust-logo.svg", "/favicon.ico", "/icon.png", "/apple-icon.png"]) {
+for (const asset of ["/logo.png", "/marke/logo-112.webp", "/favicon.ico", "/icon.png", "/apple-icon.png"]) {
   const res = await page.request.get(BASE + asset);
   record(`Asset ${asset}`, res.ok(), `${res.status()} ${res.headers()["content-type"]}`);
 }

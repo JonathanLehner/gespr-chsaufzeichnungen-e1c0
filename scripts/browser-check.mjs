@@ -65,19 +65,44 @@ async function shot(name) {
   await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: true });
 }
 
+/**
+ * Navigiert und wartet, bis die Seite interaktiv ist. Ohne diese Wartezeit
+ * treffen Eingaben gelegentlich auf noch nicht hydrierte Formulare; deren
+ * Ereignishandler fehlen dann und der Klick bleibt wirkungslos.
+ */
+async function visit(path, options = {}) {
+  const response = await page.goto(`${BASE}${path}`, { waitUntil: "load", ...options });
+  await page.waitForTimeout(600);
+  return response;
+}
+
+/**
+ * Wartet, bis `check()` zutrifft. Server Actions und Datenbankschreibvorgänge
+ * brauchen gegen eine entfernte Umgebung deutlich länger als lokal; feste
+ * Wartezeiten würden dort zu falschen Fehlschlägen führen.
+ */
+async function waitFor(check, { timeout = 25000, interval = 500 } = {}) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await check()) return true;
+    if (Date.now() > deadline) return false;
+    await page.waitForTimeout(interval);
+  }
+}
+
 /* 1 – Öffentliche Seiten */
-await page.goto(`${BASE}/`, { waitUntil: "networkidle" });
+await visit("/", { waitUntil: "networkidle" });
 record("Startseite lädt", (await page.locator("h1").first().innerText()).includes("Verkaufsgespräch"));
 await shot("01-start");
 for (const path of ["/anmelden", "/registrieren", "/passwort-vergessen"]) {
-  const response = await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+  const response = await visit(path);
   record(`Direktaufruf ${path}`, response?.status() === 200, `Status ${response?.status()}`);
 }
 record("Keine _rsc-Anfragen auf statischen Seiten", rscOnStatic.length === 0, rscOnStatic.join(", "));
 staticPhase = false;
 
 /* 2 – Registrierung mit nicht zugelassener Adresse */
-await page.goto(`${BASE}/registrieren`, { waitUntil: "domcontentloaded" });
+await visit(`/registrieren`);
 await page.fill("#name", "Test Person");
 await page.fill("#email", "test.person@gmail.com");
 await page.fill("#password", "Immotrust2026!");
@@ -103,7 +128,7 @@ await page.waitForSelector("text=Link jetzt öffnen");
 record("Registrierung erzeugt Bestätigungslink", true);
 await shot("03-registrierung-ok");
 
-await page.goto(`${BASE}/anmelden`, { waitUntil: "domcontentloaded" });
+await visit(`/anmelden`);
 await page.fill("#email", testEmail);
 await page.fill("#password", "Immotrust2026!");
 await page.click('button[type="submit"]');
@@ -115,7 +140,7 @@ record(
   notVerified.slice(0, 80),
 );
 
-await page.goto(`${BASE}/registrieren`, { waitUntil: "domcontentloaded" });
+await visit(`/registrieren`);
 await page.fill("#name", "Pia Roth");
 await page.fill("#email", testEmail);
 await page.fill("#password", "Immotrust2026!");
@@ -128,11 +153,11 @@ const confirmed = await page.locator('.notice[role="alert"]').innerText();
 record("E-Mail-Bestätigung erfolgreich", confirmed.includes("bestätigt"), confirmed.slice(0, 80));
 await shot("04-bestaetigt");
 
-await page.goto(`${BASE}/bestaetigen?token=abgelaufen123`, { waitUntil: "domcontentloaded" });
+await visit(`/bestaetigen?token=abgelaufen123`);
 const invalidToken = await page.locator('.notice[role="alert"]').innerText();
 record("Ungültiger Bestätigungslink erklärt", invalidToken.includes("ungültig"), invalidToken.slice(0, 80));
 
-await page.goto(`${BASE}/anmelden`, { waitUntil: "domcontentloaded" });
+await visit(`/anmelden`);
 await page.fill("#email", testEmail);
 await page.fill("#password", "Falsch123456");
 await page.click('button[type="submit"]');
@@ -141,7 +166,7 @@ const wrongPassword = await page.locator('.notice[role="alert"]').innerText();
 record("Falsches Passwort gemeldet", wrongPassword.includes("nicht korrekt"), wrongPassword.slice(0, 80));
 
 /* 4 – Passwort zurücksetzen */
-await page.goto(`${BASE}/passwort-vergessen`, { waitUntil: "domcontentloaded" });
+await visit(`/passwort-vergessen`);
 await page.fill("#email", testEmail);
 await page.click('button[type="submit"]');
 await page.waitForSelector("text=Link jetzt öffnen");
@@ -152,7 +177,7 @@ await page.fill("#passwordRepeat", "NeuesPasswort2026");
 await page.click('button[type="submit"]');
 await page.waitForSelector("text=Zur Anmeldung");
 record("Passwort zurückgesetzt", true);
-await page.goto(`${BASE}/passwort-neu?token=abgelaufen`, { waitUntil: "domcontentloaded" });
+await visit(`/passwort-neu?token=abgelaufen`);
 await page.fill("#password", "NeuesPasswort2026");
 await page.fill("#passwordRepeat", "NeuesPasswort2026");
 await page.click('button[type="submit"]');
@@ -161,7 +186,7 @@ const badReset = await page.locator('.notice[role="alert"]').innerText();
 record("Abgelaufener Reset-Link erklärt", badReset.includes("ungültig") || badReset.includes("abgelaufen"), badReset.slice(0, 80));
 
 /* 5 – Anmeldung als Mitarbeitende */
-await page.goto(`${BASE}/anmelden`, { waitUntil: "domcontentloaded" });
+await visit(`/anmelden`);
 await page.fill("#email", testEmail);
 await page.fill("#password", "NeuesPasswort2026");
 await page.click('button[type="submit"]');
@@ -169,7 +194,7 @@ await page.waitForURL(/aufnahmen/);
 record("Anmeldung mit neuem Passwort", true);
 
 /* 6 – Kein Admin-Zugriff für normale Konten */
-await page.goto(`${BASE}/admin`, { waitUntil: "domcontentloaded" });
+await visit(`/admin`);
 record(
   "Admin-Dashboard für Mitarbeitende gesperrt",
   (await page.locator("h1").first().innerText()).includes("Kein Zugriff"),
@@ -177,10 +202,15 @@ record(
 await shot("05-admin-gesperrt");
 
 /* 7 – Übersicht, Suche, Filter, Sortierung */
-await page.goto(`${BASE}/aufnahmen`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen`);
 const rowCount = await page.locator("tbody tr").count();
 record("Aufnahmenübersicht zeigt Zeilen", rowCount > 0, `${rowCount} Zeilen`);
 await shot("06-uebersicht");
+
+// Ausgangsbestand für den Abschlussvergleich: Der Testlauf darf ausser seinen
+// eigenen Aufnahmen nichts entfernen.
+await visit(`/aufnahmen?pageSize=100`);
+const stockBefore = await page.locator("tbody tr").count();
 
 await page.fill("#q", "Nebenkosten");
 await page.click('button:has-text("Anwenden")');
@@ -190,7 +220,7 @@ record("Volltextsuche mit hervorgehobenem Ausschnitt", markCount > 0, `${markCou
 await shot("07-suche");
 
 /* 7b – Tabellenspalten */
-await page.goto(`${BASE}/aufnahmen`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen`);
 const headers = await page.locator("thead th").allInnerTexts();
 const expectedHeaders = [
   "Anrufer",
@@ -237,7 +267,7 @@ record(
 await shot("07b-filter");
 
 /* 7d – Sortierung */
-await page.goto(`${BASE}/aufnahmen?sort=name_az`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen?sort=name_az`);
 const namesAz = (await page.locator("tbody tr td:nth-child(2)").allInnerTexts()).map((cell) =>
   cell.trim(),
 );
@@ -247,7 +277,7 @@ record(
   JSON.stringify(namesAz) === JSON.stringify(sortedAz),
   namesAz.join(" | "),
 );
-await page.goto(`${BASE}/aufnahmen?sort=bewertung_hoch`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen?sort=bewertung_hoch`);
 const scores = (await page.locator("tbody tr td:nth-child(7)").allInnerTexts()).map((cell) => {
   const match = /(\d+(?:[.,]\d)?)/.exec(cell);
   return match ? Number(match[1].replace(",", ".")) : -1;
@@ -259,7 +289,7 @@ record(
 );
 
 /* 7e – Serverseitige Seitennavigation */
-await page.goto(`${BASE}/aufnahmen?pageSize=5`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen?pageSize=5`);
 const firstPageRows = await page.locator("tbody tr").count();
 const hasPager = (await page.locator('nav[aria-label="Seitennavigation"]').count()) > 0;
 if (hasPager) {
@@ -277,7 +307,7 @@ if (hasPager) {
 }
 await shot("07c-seiten");
 
-await page.goto(`${BASE}/aufnahmen?q=Nebenkosten`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen?q=Nebenkosten`);
 const hitLink = page.locator('a[href*="?t="]').first();
 const hasHit = (await hitLink.count()) > 0;
 if (hasHit) {
@@ -406,7 +436,7 @@ writeFileSync(badPath, toneWav(2));
 const txtPath = join(OUT, "notiz.txt");
 writeFileSync(txtPath, "keine Audiodatei");
 
-await page.goto(`${BASE}/upload`, { waitUntil: "domcontentloaded" });
+await visit(`/upload`);
 await page.setInputFiles('input[type="file"]', [okPath, badPath, txtPath]);
 await page.waitForSelector("text=Bereit", { timeout: 30000 });
 const parsedRow = await page.locator("tbody tr", { hasText: "Ziegler" }).innerText();
@@ -479,7 +509,7 @@ record("Bereits vorhandene Datei erkannt", duplicateNotice > 0, `${duplicateNoti
 await shot("12b-upload-duplikat");
 
 /* 11d – Verarbeitungszustand ohne Transkript */
-await page.goto(`${BASE}/aufnahmen?q=Ziegler`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen?q=Ziegler`);
 await page.locator("tbody tr", { hasText: "Ziegler" }).first().locator('a:has-text("Öffnen")').click();
 await page.waitForURL(/aufnahmen\/rec_/);
 const transcriptState = await page
@@ -504,15 +534,14 @@ await page.fill("#email", "jonathanslehner@gmail.com");
 await page.fill("#password", "Immotrust2026!");
 await page.click('button[type="submit"]');
 await page.waitForURL(/aufnahmen/);
-await page.goto(`${BASE}/admin`, { waitUntil: "domcontentloaded" });
+await visit(`/admin`);
 record("Admin-Dashboard für Superuser sichtbar", (await page.locator("h1").innerText()).includes("Admin-Dashboard"));
 await shot("13-admin");
 
 await page.fill("#testname", "[Weber, Samir]_386-0447523770_20260601130748(1135)");
-await page.waitForTimeout(900);
 record(
   "Standardvorlage erkennt das Beispiel",
-  (await page.locator("text=liest den Testdateinamen korrekt").count()) > 0,
+  await waitFor(async () => (await page.locator("text=liest den Testdateinamen korrekt").count()) > 0),
 );
 await page.fill("#vorlage", "[{Nachname}, {Vorname}]_{Telefonnummer}");
 const templateError = await page
@@ -545,10 +574,9 @@ record(
   customTemplate,
 );
 await page.fill("#testname", "Kunz_Silvan_20260712081500_386-0447771122_1152");
-await page.waitForTimeout(900);
 record(
   "Eigene Vorlage in der Vorschau geprüft",
-  (await page.locator("text=liest den Testdateinamen korrekt").count()) > 0,
+  await waitFor(async () => (await page.locator("text=liest den Testdateinamen korrekt").count()) > 0),
   customTemplate,
 );
 await page.click('button:has-text("Vorlage speichern")');
@@ -556,10 +584,10 @@ await page.waitForSelector("text=/Vorlage gespeichert \\(Version \\d+\\)/", { ti
 const savedNotice = await page.locator("text=/Vorlage gespeichert \\(Version \\d+\\)/").first().innerText();
 record("Neue Vorlage gespeichert und versioniert", true, savedNotice.slice(0, 90));
 await page.click('button:has-text("Standardvorlage wiederherstellen")');
-await page.waitForTimeout(2500);
+const DEFAULT_TEMPLATE = "[{Nachname}, {Vorname}]_{Telefonnummer}_{DatumZeit}({Anrufnummer})";
 record(
   "Standardvorlage wiederherstellbar",
-  (await page.inputValue("#vorlage")) === "[{Nachname}, {Vorname}]_{Telefonnummer}_{DatumZeit}({Anrufnummer})",
+  await waitFor(async () => (await page.inputValue("#vorlage")) === DEFAULT_TEMPLATE),
   await page.inputValue("#vorlage"),
 );
 
@@ -594,20 +622,28 @@ let confirmationChecked = false;
 let removedAll = true;
 
 for (const name of TEST_NAMES) {
-  await page.goto(`${BASE}/aufnahmen?q=${name}`, { waitUntil: "domcontentloaded" });
+  await visit(`/aufnahmen?q=${name}`);
   const testRow = page.locator("tbody tr", { hasText: name }).first();
   if ((await testRow.count()) === 0) continue;
-  await testRow.locator('button:has-text("Zur Löschung markieren")').click();
-  await page.fill('input[id^="grund-"]', "Testaufnahme der automatischen Prüfung");
-  await page.click('button:has-text("Markierung setzen")');
-  await page.waitForTimeout(2500);
+  // Eine Testaufnahme aus einem abgebrochenen Lauf kann bereits markiert sein.
+  const markButton = testRow.locator('button:has-text("Zur Löschung markieren")');
+  if ((await markButton.count()) > 0) {
+    await markButton.click();
+    await page.fill('input[id^="grund-"]', "Testaufnahme der automatischen Prüfung");
+    await page.click('button:has-text("Markierung setzen")');
+    await page.waitForTimeout(2500);
+  }
 
-  await page.goto(`${BASE}/admin`, { waitUntil: "domcontentloaded" });
   const flaggedSection = page.locator("section", {
     has: page.locator('h2:has-text("Zur Löschung markierte Aufnahmen")'),
   });
   const flaggedRow = flaggedSection.locator("tbody tr", { hasText: name }).first();
-  if ((await flaggedRow.count()) === 0) {
+  // Die Markierung erscheint im Admin erst, wenn der Schreibvorgang durch ist.
+  const flaggedVisible = await waitFor(async () => {
+    await visit(`/admin`);
+    return (await flaggedRow.count()) > 0;
+  });
+  if (!flaggedVisible) {
     record(`Löschmarkierung im Admin sichtbar (${name})`, false, "Zeile nicht gefunden");
     removedAll = false;
     continue;
@@ -626,17 +662,23 @@ for (const name of TEST_NAMES) {
   }
   await page.fill('[role="dialog"] input', "LÖSCHEN");
   await page.click('[role="dialog"] button:has-text("Endgültig löschen")');
-  await page.waitForTimeout(4000);
-  await page.goto(`${BASE}/aufnahmen?q=${name}`, { waitUntil: "domcontentloaded" });
-  if ((await page.locator("tbody tr", { hasText: name }).count()) !== 0) removedAll = false;
+  const gone = await waitFor(async () => {
+    await visit(`/aufnahmen?q=${name}`);
+    return (await page.locator("tbody tr", { hasText: name }).count()) === 0;
+  });
+  if (!gone) removedAll = false;
 }
 record("Endgültiges Löschen entfernt die Aufnahmen", removedAll, TEST_NAMES.join(", "));
 
 /* 15 – Demobestand vollständig und unverändert */
-await page.goto(`${BASE}/aufnahmen`, { waitUntil: "domcontentloaded" });
-const finalRows = await page.locator("tbody tr td:nth-child(2)").count();
-record("Demobestand nach der Prüfung vollständig", finalRows === 8, `${finalRows} Aufnahmen`);
-await page.goto(`${BASE}/aufnahmen?loeschstatus=nur_markiert`, { waitUntil: "domcontentloaded" });
+await visit(`/aufnahmen?pageSize=100`);
+const finalRows = await page.locator("tbody tr").count();
+record(
+  "Bestand nach der Prüfung unverändert",
+  finalRows === stockBefore,
+  `${finalRows} von zuvor ${stockBefore} Aufnahmen`,
+);
+await visit(`/aufnahmen?loeschstatus=nur_markiert`);
 record(
   "Bestehende Löschmarkierung weiterhin vorhanden",
   (await page.locator("tbody tr", { hasText: "Lena Brunner" }).count()) > 0,

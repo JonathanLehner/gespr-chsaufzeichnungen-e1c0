@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gespr-chsaufzeichnungen-e1c0",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-17",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "routes": [
+    "gespr-chsaufzeichnungen-e1c0.clawcorp.ai/*"
+  ]
+}

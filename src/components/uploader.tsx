@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { prepareUploadAction } from "@/app/actions/recordings";
 import { formatDateTime, localInputToUtcIso, utcIsoToLocalInput } from "@/lib/time";
 
@@ -144,6 +144,20 @@ export function Uploader({ template }: { template: string }) {
     },
     [items],
   );
+
+  // Gelangen Dateien in das Feld, bevor React den change-Handler angehängt hat,
+  // geht das Ereignis verloren. Der Feldinhalt wird deshalb beim Einhängen
+  // einmalig nachgeholt.
+  const initialFilesRead = useRef(false);
+  useEffect(() => {
+    if (initialFilesRead.current) return;
+    initialFilesRead.current = true;
+    const input = inputRef.current;
+    if (!input?.files?.length) return;
+    const pending = Array.from(input.files);
+    input.value = "";
+    void addFiles(pending);
+  }, [addFiles]);
 
   const startUpload = useCallback(async () => {
     if (running) return;
