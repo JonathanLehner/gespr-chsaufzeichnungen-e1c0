@@ -593,9 +593,12 @@ writeFileSync(okPath, toneWav(3));
 writeFileSync(badPath, toneWav(2));
 const txtPath = join(OUT, "notiz.txt");
 writeFileSync(txtPath, "keine Audiodatei");
+const emptyName = "[Meier, Lea]_386-0441112233_20260713101500(1160).wav";
+const emptyPath = join(OUT, emptyName);
+writeFileSync(emptyPath, Buffer.alloc(0));
 
 await visit(`/upload`);
-await page.setInputFiles('input[type="file"]', [okPath, badPath, txtPath]);
+await page.setInputFiles('input[type="file"]', [okPath, badPath, txtPath, emptyPath]);
 await page.waitForSelector("text=Bereit", { timeout: 30000 });
 const parsedRow = await page.locator("tbody tr", { hasText: "Ziegler" }).innerText();
 record("Metadaten aus Dateiname erkannt", parsedRow.includes("Nina Ziegler") && parsedRow.includes("10.07.2026"), parsedRow.replace(/\s+/g, " ").slice(0, 120));
@@ -606,6 +609,37 @@ record(
 record(
   "Falscher Dateityp abgewiesen",
   (await page.locator("text=Nicht unterstütztes Dateiformat").count()) > 0,
+);
+
+// Harte Ausschlüsse: Grund benannt, Zeile gesperrt, nur „Entfernen“ verfügbar.
+const formatRow = page.locator("tbody tr", { hasText: "notiz.txt" });
+const formatText = (await formatRow.innerText()).replace(/\s+/g, " ");
+record(
+  "Warnhinweis nennt das Format als Grund",
+  formatText.includes("Format nicht unterstützt") && !formatText.includes("Dateiname nicht lesbar"),
+  formatText.slice(0, 140),
+);
+record(
+  "Nicht unterstütztes Format bleibt gesperrt",
+  formatText.includes("Kann nicht hochgeladen werden") &&
+    (await formatRow.locator('button:has-text("Daten erfassen")').count()) === 0 &&
+    (await formatRow.locator('button:has-text("Bearbeiten")').count()) === 0 &&
+    (await formatRow.locator('button:has-text("Entfernen")').count()) === 1,
+);
+const emptyRow = page.locator("tbody tr", { hasText: "Meier" });
+const emptyText = (await emptyRow.innerText()).replace(/\s+/g, " ");
+record(
+  "Leere Datei wird als solche benannt und gesperrt",
+  emptyText.includes("Datei leer") &&
+    emptyText.includes("Kann nicht hochgeladen werden") &&
+    (await emptyRow.locator('button:has-text("Daten erfassen")').count()) === 0,
+  emptyText.slice(0, 140),
+);
+const uploadButtonLabel = await page.locator('button:has-text("hochladen")').first().innerText();
+record(
+  "Gesperrte Dateien zählen nicht zum Upload",
+  /^1 Datei hochladen$/.test(uploadButtonLabel.trim()),
+  uploadButtonLabel.trim(),
 );
 await shot("10-upload-liste");
 
@@ -621,6 +655,15 @@ await page.waitForTimeout(500);
 record(
   "Korrektur-Modal ergänzt Metadaten",
   (await page.locator("tbody tr", { hasText: "Rolf Zimmermann" }).count()) > 0,
+);
+const afterFixLabel = (await page.locator('button:has-text("hochladen")').first().innerText()).trim();
+record(
+  "Korrektur gibt nur die behebbare Zeile frei",
+  /^2 Dateien hochladen$/.test(afterFixLabel) &&
+    (await page.locator("tbody tr", { hasText: "notiz.txt" }).innerText()).includes(
+      "Kann nicht hochgeladen werden",
+    ),
+  afterFixLabel,
 );
 await shot("11-upload-korrektur");
 

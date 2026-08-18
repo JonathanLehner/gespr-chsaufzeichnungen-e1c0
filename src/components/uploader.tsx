@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { prepareUploadAction } from "@/app/actions/recordings";
+import { prepareUploadAction, type PreparedProblem } from "@/app/actions/recordings";
 import { formatDateTime, localInputToUtcIso, utcIsoToLocalInput } from "@/lib/time";
 
 type Metadata = {
@@ -14,13 +14,21 @@ type Metadata = {
   callAtUtc: string;
 };
 
-type ItemStatus = "bereit" | "problem" | "laeuft" | "fertig" | "fehler" | "vorhanden";
+type ItemStatus =
+  | "bereit"
+  | "problem"
+  | "gesperrt"
+  | "laeuft"
+  | "fertig"
+  | "fehler"
+  | "vorhanden";
 
 type Item = {
   key: string;
   file: File;
   status: ItemStatus;
   problem: string | null;
+  reason: PreparedProblem | null;
   duplicate: boolean;
   metadata: Metadata | null;
   source: "dateiname" | "manuell";
@@ -31,6 +39,15 @@ type Item = {
 };
 
 const ACCEPTED = [".wav", ".mp3"];
+
+/** Beschriftung des Warnhinweises in der Statusspalte. */
+const REASON_LABEL: Record<PreparedProblem, string> = {
+  format: "Format nicht unterstützt",
+  "zu-gross": "Datei zu gross",
+  leer: "Datei leer",
+  dateiname: "Dateiname nicht lesbar",
+  vorhanden: "Bereits vorhanden",
+};
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -126,8 +143,9 @@ export function Uploader({ template }: { template: string }) {
           return {
             key: itemKey(file),
             file,
-            status: info.ok ? "bereit" : "problem",
+            status: info.ok ? "bereit" : info.blocked ? "gesperrt" : "problem",
             problem: info.problem,
+            reason: info.reason,
             duplicate: info.duplicate,
             metadata: info.metadata,
             source: "dateiname",
@@ -204,6 +222,7 @@ export function Uploader({ template }: { template: string }) {
   const failedCount = items.filter((item) => item.status === "fehler").length;
   const doneCount = items.filter((item) => item.status === "fertig" || item.status === "vorhanden").length;
   const problemCount = items.filter((item) => item.status === "problem").length;
+  const blockedCount = items.filter((item) => item.status === "gesperrt").length;
   const editItem = items.find((item) => item.key === editKey) ?? null;
 
   return (
@@ -289,6 +308,11 @@ export function Uploader({ template }: { template: string }) {
               {problemCount > 0 && (
                 <span className="badge bg-warn-soft text-warn">{problemCount} zu klären</span>
               )}
+              {blockedCount > 0 && (
+                <span className="badge bg-bad-soft text-bad">
+                  {blockedCount} nicht hochladbar
+                </span>
+              )}
               {failedCount > 0 && (
                 <span className="badge bg-bad-soft text-bad">{failedCount} fehlgeschlagen</span>
               )}
@@ -330,16 +354,18 @@ export function Uploader({ template }: { template: string }) {
                       </td>
                       <td className="td">
                         <div className="flex flex-wrap gap-1">
-                          {item.status !== "fertig" && item.status !== "vorhanden" && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost"
-                              disabled={running}
-                              onClick={() => setEditKey(item.key)}
-                            >
-                              {item.metadata ? "Bearbeiten" : "Daten erfassen"}
-                            </button>
-                          )}
+                          {item.status !== "fertig" &&
+                            item.status !== "vorhanden" &&
+                            item.status !== "gesperrt" && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                disabled={running}
+                                onClick={() => setEditKey(item.key)}
+                              >
+                                {item.metadata ? "Bearbeiten" : "Daten erfassen"}
+                              </button>
+                            )}
                           {item.recordingId && (
                             <Link href={`/aufnahmen/${item.recordingId}`} className="btn btn-ghost">
                               Öffnen
@@ -366,7 +392,7 @@ export function Uploader({ template }: { template: string }) {
         </>
       )}
 
-      {editItem && (
+      {editItem && editItem.status !== "gesperrt" && (
         <MetadataDialog
           item={editItem}
           onClose={() => setEditKey(null)}
@@ -376,6 +402,7 @@ export function Uploader({ template }: { template: string }) {
               source: "manuell",
               status: editItem.duplicate ? "problem" : "bereit",
               problem: editItem.duplicate ? "Diese Datei wurde bereits hochgeladen." : null,
+              reason: editItem.duplicate ? "vorhanden" : null,
             });
             setEditKey(null);
           }}
@@ -420,11 +447,24 @@ function ItemStatusCell({ item }: { item: Item }) {
       </div>
     );
   }
+  if (item.status === "gesperrt") {
+    return (
+      <div>
+        <span className="badge bg-bad-soft text-bad">
+          {item.reason ? REASON_LABEL[item.reason] : "Datei nicht verwendbar"}
+        </span>
+        <span className="mt-1 block text-[11px] font-semibold text-bad">
+          Kann nicht hochgeladen werden
+        </span>
+        <span className="mt-0.5 block text-[11px] text-ink-faint">{item.problem}</span>
+      </div>
+    );
+  }
   if (item.status === "problem") {
     return (
       <div>
         <span className="badge bg-warn-soft text-warn">
-          {item.duplicate ? "Bereits vorhanden" : "Dateiname nicht lesbar"}
+          {item.reason ? REASON_LABEL[item.reason] : "Dateiname nicht lesbar"}
         </span>
         <span className="mt-1 block text-[11px] text-warn">{item.problem}</span>
       </div>

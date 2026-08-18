@@ -29,11 +29,22 @@ export type ActionResult = { ok: boolean; message: string };
 
 export type FileCandidate = { name: string; size: number };
 
+/**
+ * Grund einer Beanstandung. „format“, „zu-gross“ und „leer“ sind harte
+ * Ausschlüsse: Sie lassen sich im Korrektur-Modal nicht beheben, weil nicht die
+ * Metadaten, sondern die Datei selbst das Problem ist.
+ */
+export type PreparedProblem = "format" | "zu-gross" | "leer" | "dateiname" | "vorhanden";
+
 export type PreparedFile = {
   name: string;
   size: number;
   ok: boolean;
   problem: string | null;
+  /** Auslöser der Beanstandung, damit die Übersicht den Grund benennen kann. */
+  reason: PreparedProblem | null;
+  /** Datei ist grundsätzlich untauglich – auch mit korrigierten Metadaten. */
+  blocked: boolean;
   duplicate: boolean;
   metadata: {
     callerName: string;
@@ -71,6 +82,8 @@ export async function prepareUploadAction(candidates: FileCandidate[]): Promise<
         size: candidate.size,
         ok: false,
         problem: "Nicht unterstütztes Dateiformat. Zulässig sind ausschliesslich WAV und MP3.",
+        reason: "format",
+        blocked: true,
         duplicate,
         metadata: null,
       };
@@ -81,6 +94,8 @@ export async function prepareUploadAction(candidates: FileCandidate[]): Promise<
         size: candidate.size,
         ok: false,
         problem: "Die Datei ist grösser als 50 MB und kann nicht hochgeladen werden.",
+        reason: "zu-gross",
+        blocked: true,
         duplicate,
         metadata: null,
       };
@@ -91,6 +106,8 @@ export async function prepareUploadAction(candidates: FileCandidate[]): Promise<
         size: candidate.size,
         ok: false,
         problem: "Die Datei ist leer.",
+        reason: "leer",
+        blocked: true,
         duplicate,
         metadata: null,
       };
@@ -102,6 +119,8 @@ export async function prepareUploadAction(candidates: FileCandidate[]): Promise<
         size: candidate.size,
         ok: false,
         problem: parsed.error,
+        reason: "dateiname",
+        blocked: false,
         duplicate,
         metadata: null,
       };
@@ -111,6 +130,8 @@ export async function prepareUploadAction(candidates: FileCandidate[]): Promise<
       size: candidate.size,
       ok: !duplicate,
       problem: duplicate ? "Diese Datei wurde bereits hochgeladen." : null,
+      reason: duplicate ? "vorhanden" : null,
+      blocked: false,
       duplicate,
       metadata: parsed.data,
     };
