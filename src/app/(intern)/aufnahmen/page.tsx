@@ -124,9 +124,9 @@ export default async function AufnahmenPage({
 
       <TranscriptionWatcher entries={watched} />
 
-      <div className="card overflow-hidden">
+      <div className="card overflow-hidden max-[699px]:border-0 max-[699px]:bg-transparent">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] border-collapse">
+          <table className="stack-cards w-full min-w-0 border-collapse min-[700px]:min-w-[1180px]">
             <thead className="bg-canvas">
               <tr>
                 <th className="th">Gesprächszeitpunkt (CET)</th>
@@ -144,7 +144,7 @@ export default async function AufnahmenPage({
             <tbody>
               {result.rows.length === 0 && (
                 <tr>
-                  <td className="td text-center text-ink-soft" colSpan={10}>
+                  <td className="td text-center text-ink-soft" colSpan={10} data-cell="leer">
                     {result.totalAll === 0
                       ? "Es sind noch keine Aufnahmen vorhanden. Laden Sie die ersten Gesprächsaufzeichnungen hoch."
                       : "Keine Aufnahme entspricht den gewählten Filtern."}
@@ -153,50 +153,79 @@ export default async function AufnahmenPage({
               )}
               {result.rows.map((row) => (
                 <Fragment key={row._id}>
-                  <tr className="hover:bg-canvas/60">
-                    <td className="td whitespace-nowrap font-medium">
+                  <tr className="min-[700px]:hover:bg-canvas/60">
+                    <td
+                      className="td font-medium min-[700px]:whitespace-nowrap"
+                      data-cell="zeitpunkt"
+                    >
                       <Link href={`/aufnahmen/${row._id}`} className="text-petrol hover:underline">
                         {formatDateTime(row.callAtUtc)}
                       </Link>
-                      <span className="mt-0.5 block font-mono text-[11px] text-ink-faint">
+                      <span className="mt-0.5 block break-all font-mono text-[11px] text-ink-faint">
                         {row.originalFilename}
                       </span>
                     </td>
-                    <td className="td">
+                    <td className="td" data-cell="anrufer">
                       <span className="font-medium text-ink">{row.callerName}</span>
                       {row.metadataSource === "manuell" && (
                         <span className="ml-1.5 badge bg-petrol-soft text-petrol">manuell erfasst</span>
                       )}
                     </td>
-                    <td className="td whitespace-nowrap font-mono text-[12px]">
-                      {row.phoneNumber || "–"}
+                    <td
+                      className="td font-mono text-[12px] min-[700px]:whitespace-nowrap"
+                      data-cell="wert"
+                    >
+                      <CardLabel>Telefonnummer</CardLabel>
+                      <span className="block">{row.phoneNumber || "–"}</span>
                     </td>
-                    <td className="td whitespace-nowrap font-mono text-[12px]">{row.callNumber || "–"}</td>
-                    <td className="td whitespace-nowrap font-mono text-[12px]">
-                      {formatDuration(row.durationMs)}
+                    <td
+                      className="td font-mono text-[12px] min-[700px]:whitespace-nowrap"
+                      data-cell="wert"
+                    >
+                      <CardLabel>Anrufnr.</CardLabel>
+                      <span className="block">{row.callNumber || "–"}</span>
                     </td>
-                    <td className="td whitespace-nowrap">{row.uploadedByName}</td>
-                    <td className="td">
-                      <RatingValue average={row.ratingAverage} count={row.ratingCount} />
+                    <td
+                      className="td font-mono text-[12px] min-[700px]:whitespace-nowrap"
+                      data-cell="wert"
+                    >
+                      <CardLabel>Dauer</CardLabel>
+                      <span className="block">{formatDuration(row.durationMs)}</span>
                     </td>
-                    <td className="td">
-                      <StatusBadge status={row.transcriptionStatus} />
-                      {row.transcriptionStatus === "fehlgeschlagen" && (
-                        <span className="mt-0.5 block max-w-[220px] text-[11px] leading-snug text-ink-faint">
-                          {describeTranscriptionError(row.transcriptionError).message}
-                        </span>
-                      )}
+                    <td className="td min-[700px]:whitespace-nowrap" data-cell="wert">
+                      <CardLabel>Hochgeladen von</CardLabel>
+                      <span className="block">{row.uploadedByName}</span>
                     </td>
-                    <td className="td">
-                      <DeletionBadge flagged={row.deletionFlagged} />
-                      {row.deletionFlagged && row.deletionFlaggedBy && (
-                        <span className="mt-0.5 block text-[11px] text-ink-faint">
-                          {row.deletionFlaggedBy}
-                        </span>
-                      )}
+                    <td className="td" data-cell="wert">
+                      <CardLabel>Bewertung</CardLabel>
+                      <span className="block">
+                        <RatingValue average={row.ratingAverage} count={row.ratingCount} />
+                      </span>
                     </td>
-                    <td className="td">
-                      <div className="flex flex-col items-start gap-1">
+                    <td className="td" data-cell="wert">
+                      <CardLabel>Transkription</CardLabel>
+                      <span className="block">
+                        <StatusBadge status={row.transcriptionStatus} />
+                        {row.transcriptionStatus === "fehlgeschlagen" && (
+                          <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
+                            {describeTranscriptionError(row.transcriptionError).message}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="td" data-cell="wert">
+                      <CardLabel>Löschmarkierung</CardLabel>
+                      <span className="block">
+                        <DeletionBadge flagged={row.deletionFlagged} />
+                        {row.deletionFlagged && row.deletionFlaggedBy && (
+                          <span className="mt-0.5 block text-[11px] text-ink-faint">
+                            {row.deletionFlaggedBy}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="td" data-cell="aktion">
+                      <div className="flex flex-wrap items-start gap-2 min-[700px]:flex-col min-[700px]:gap-1">
                         <Link href={`/aufnahmen/${row._id}`} className="btn btn-ghost">
                           Öffnen
                         </Link>
@@ -211,8 +240,8 @@ export default async function AufnahmenPage({
                     </td>
                   </tr>
                   {(row.hits.length > 0 || row.matchedFields.length > 0) && (
-                    <tr className="bg-petrol-soft/40">
-                      <td className="td" colSpan={10}>
+                    <tr className="bg-petrol-soft/40" data-row="treffer">
+                      <td className="td" colSpan={10} data-cell="treffer">
                         {row.matchedFields.length > 0 && (
                           <p className="text-[12px] text-ink-soft">
                             Treffer in: <strong>{row.matchedFields.join(", ")}</strong>
@@ -286,6 +315,18 @@ export default async function AufnahmenPage({
         Mitarbeitenden sichtbar.
       </p>
     </div>
+  );
+}
+
+/**
+ * Spaltenbezeichnung innerhalb der Karte. Unterhalb von 700 px ersetzt sie den
+ * ausgeblendeten Tabellenkopf; ab 700 px trägt der Tabellenkopf die Beschriftung.
+ */
+function CardLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex-none text-[11px] font-bold uppercase tracking-[0.06em] text-ink-soft min-[700px]:hidden">
+      {children}
+    </span>
   );
 }
 

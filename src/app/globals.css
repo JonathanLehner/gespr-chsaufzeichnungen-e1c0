@@ -213,6 +213,83 @@
     vertical-align: top;
   }
 
+  /* Aufnahmenübersicht auf schmalen Geräten: Jede Tabellenzeile wird zu einer
+     gestapelten Karte. Als Tabelle wäre auf einem Telefon nur die erste Spalte
+     sichtbar, Bewertung, Status und Aktionen blieben unerreichbar. */
+  @media (max-width: 699px) {
+    .stack-cards,
+    .stack-cards tbody,
+    .stack-cards tr,
+    .stack-cards td {
+      display: block;
+    }
+
+    .stack-cards thead {
+      display: none;
+    }
+
+    .stack-cards tr {
+      background: var(--color-surface);
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      margin-bottom: 0.6rem;
+      padding: 0.35rem 0;
+    }
+
+    .stack-cards tr:last-child {
+      margin-bottom: 0;
+    }
+
+    .stack-cards td {
+      border-bottom: 0;
+      padding: 0.25rem 0.75rem;
+      overflow-wrap: anywhere;
+    }
+
+    .stack-cards td[data-cell="wert"] {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.75rem;
+      text-align: right;
+    }
+
+    .stack-cards td[data-cell="zeitpunkt"] {
+      padding-top: 0.5rem;
+    }
+
+    .stack-cards td[data-cell="anrufer"] {
+      padding-bottom: 0.5rem;
+      margin-bottom: 0.35rem;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    .stack-cards td[data-cell="aktion"] {
+      margin-top: 0.35rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--color-line);
+    }
+
+    /* Das Begründungsfeld der Löschmarkierung braucht die ganze Kartenbreite. */
+    .stack-cards td[data-cell="aktion"] > div > div:has(.card) {
+      flex: 1 1 100%;
+    }
+
+    /* Trefferzeilen gehören optisch zur Karte darüber. */
+    .stack-cards tr:has(+ tr[data-row="treffer"]) {
+      margin-bottom: 0;
+      border-bottom: 0;
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    .stack-cards tr[data-row="treffer"] {
+      border-top: 0;
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+    }
+  }
+
   mark {
     background: #fdeaa8;
     color: inherit;
