@@ -37,11 +37,11 @@ function StateNotice({ state }: { state: AuthState }) {
   return (
     <div id={NOTICE_ID} className={`notice ${isError ? "notice-error" : "notice-ok"} mb-4`} role="alert">
       <p>{state.message}</p>
-      {state.link && (
+      {state.verifyLink && (
         <p className="mt-2 border-t border-current/20 pt-2 text-[12px]">
-          In dieser Umgebung ist kein E-Mail-Versand eingerichtet. Der Link wird deshalb direkt
-          angezeigt:{" "}
-          <Link href={state.link} className="font-semibold underline underline-offset-2">
+          In dieser Umgebung ist kein E-Mail-Versand eingerichtet. Der Bestätigungslink wird deshalb
+          direkt angezeigt:{" "}
+          <Link href={state.verifyLink} className="font-semibold underline underline-offset-2">
             Link jetzt öffnen
           </Link>
         </p>
@@ -181,7 +181,7 @@ export function RequestResetForm() {
           {...invalidEmail(state)}
         />
       </div>
-      <SubmitButton label="Link zum Zurücksetzen erzeugen" pendingLabel="Wird erzeugt …" />
+      <SubmitButton label="Link zum Zurücksetzen anfordern" pendingLabel="Wird angefordert …" />
     </form>
   );
 }

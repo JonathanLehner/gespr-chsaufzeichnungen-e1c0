@@ -369,7 +369,7 @@ try:
 
     go("/passwort-vergessen")
     forgot_ok = has_text("Passwort zur\u00fccksetzen") and has_text(
-        "Link zum Zur\u00fccksetzen erzeugen"
+        "Link zum Zur\u00fccksetzen anfordern"
     )
     findings.append("Passwort-vergessen-Formular=%s" % forgot_ok)
 

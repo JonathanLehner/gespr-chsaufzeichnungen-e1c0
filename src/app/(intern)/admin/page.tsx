@@ -266,8 +266,9 @@ export default async function AdminPage() {
         <div className="card p-5">
           <h2 className="text-[15px] font-semibold text-ink">Bestätigungs- und Reset-Links</h2>
           <p className="mt-1 text-[12.5px] leading-relaxed text-ink-soft">
-            In dieser Umgebung ist kein E-Mail-Versand konfiguriert. Erzeugte Links werden hier
+            In dieser Umgebung ist kein E-Mail-Versand konfiguriert. Bestätigungslinks werden hier
             protokolliert, damit die Administration Mitarbeitenden bei Bedarf weiterhelfen kann.
+            Links zum Zurücksetzen des Passworts werden nie angezeigt – auch hier nicht.
           </p>
           {recentMails.length === 0 ? (
             <p className="mt-3 text-[13px] text-ink-soft">Noch keine Links erzeugt.</p>
@@ -283,12 +284,19 @@ export default async function AdminPage() {
                     erzeugt {formatDateTimeWithSeconds(mail.createdAt)} · gültig bis{" "}
                     {formatDateTimeWithSeconds(mail.expiresAt)}
                   </p>
-                  <Link
-                    href={mail.link}
-                    className="mt-0.5 block truncate font-mono text-[11px] text-petrol hover:underline"
-                  >
-                    {mail.link}
-                  </Link>
+                  {mail.kind === "bestaetigung" ? (
+                    <Link
+                      href={mail.link}
+                      className="mt-0.5 block truncate font-mono text-[11px] text-petrol hover:underline"
+                    >
+                      {mail.link}
+                    </Link>
+                  ) : (
+                    <p className="mt-0.5 text-[11px] text-ink-faint">
+                      Link aus Sicherheitsgründen ausgeblendet – er wird ausschliesslich per E-Mail
+                      zugestellt.
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>

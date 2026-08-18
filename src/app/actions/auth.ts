@@ -130,7 +130,7 @@ export async function registerAction(_prev: AuthState, formData: FormData): Prom
       return {
         status: "erfolg",
         email,
-        link,
+        verifyLink: link,
         message:
           "Für diese Adresse besteht bereits ein unbestätigtes Konto. Wir haben einen neuen Bestätigungslink erzeugt.",
       };
@@ -142,7 +142,7 @@ export async function registerAction(_prev: AuthState, formData: FormData): Prom
   return {
     status: "erfolg",
     email,
-    link,
+    verifyLink: link,
     message: "Konto angelegt. Bitte bestätigen Sie jetzt Ihre E-Mail-Adresse.",
   };
 }
@@ -173,7 +173,7 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
     return {
       status: "fehler",
       email,
-      link,
+      verifyLink: link,
       message:
         "Ihre E-Mail-Adresse ist noch nicht bestätigt. Wir haben einen neuen Bestätigungslink erzeugt.",
     };
@@ -220,20 +220,19 @@ export async function requestResetAction(_prev: AuthState, formData: FormData): 
     return { status: "fehler", message: EMAIL_NOT_ALLOWED_MESSAGE, email, field: "email" };
   }
   const user = await findById<User>(Collections.users, email);
-  if (!user) {
-    return {
-      status: "erfolg",
-      email,
-      message:
-        "Falls ein Konto zu dieser Adresse besteht, wurde ein Link zum Zurücksetzen erzeugt. Er ist 60 Minuten gültig.",
-    };
+  if (user) {
+    // Der Link wandert ausschliesslich in den Postausgang. Er wird bewusst weder
+    // zurückgegeben noch angezeigt – auch nicht, wenn kein E-Mail-Versand
+    // eingerichtet ist, weil er sonst jeder Person offenstünde, die eine fremde
+    // Adresse eintippt.
+    await issueToken(email, "passwort_reset");
   }
-  const { link } = await issueToken(email, "passwort_reset");
+  // Bewusst identische Antwort für bestehende und unbekannte Adressen.
   return {
     status: "erfolg",
     email,
-    link,
-    message: "Link zum Zurücksetzen erzeugt. Er ist 60 Minuten gültig.",
+    message:
+      "Falls ein Konto zu dieser Adresse besteht, haben wir einen Link zum Zurücksetzen an diese E-Mail-Adresse geschickt. Er ist 60 Minuten gültig. Aus Sicherheitsgründen wird der Link nie hier angezeigt. Kommt keine E-Mail an, wenden Sie sich bitte an die Administration.",
   };
 }
 
