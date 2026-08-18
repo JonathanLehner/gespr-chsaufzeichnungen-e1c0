@@ -9,7 +9,9 @@ import { hardDeleteRecording, refreshRatingSummary } from "../src/lib/recordings
 import type { Comment, Rating, Recording, User } from "../src/lib/types";
 
 const TEST_CALLERS = ["Ziegler", "Zimmermann", "Kunz"];
-const TEST_ACCOUNT = /^pia\.roth\+/i;
+// Konten der automatischen Prüfläufe: die Registrierung legt sie unter
+// `pia.roth+…` an, ältere Läufe und Admin-Prüfkonten unter `pruefung…`.
+const TEST_ACCOUNT = /^(pia\.roth\+|pruefung[.+])/i;
 
 const recordings = await findMany<Recording>(Collections.recordings, {});
 for (const recording of recordings) {

@@ -38,27 +38,12 @@ CLAWCORP_API_KEY=...   # ClawCorp-Plattform: Datenbank, Gemini, Objektspeicher
 AUTH_SECRET=...        # Signaturschlüssel für Wiedergabe-Tokens
 ```
 
-## Demodaten
+## Konten
 
-```bash
-npx tsx --env-file=.env.local --conditions=react-server scripts/seed.mts
-```
-
-Das Skript legt vier Konten an, erzeugt acht deutschsprachige Beispielgespräche per Sprachsynthese,
-speichert sie im Objektspeicher, transkribiert sie über die reguläre Verarbeitungsstrecke und
-ergänzt Kommentare, Bewertungen und eine Löschmarkierung. Mit `--reset` werden vorhandene Aufnahmen
-vorher entfernt.
-
-Demokonten (Passwort `Immotrust2026!`):
-
-| Konto | Rolle |
-| --- | --- |
-| `jonathanslehner@gmail.com` | Superuser mit Admin-Dashboard |
-| `samir.weber@immotrustag.ch` | Mitarbeitend |
-| `lena.brunner@immotrustag.ch` | Mitarbeitend |
-| `marco.fischer@immotrustag.ch` | Mitarbeitend |
-
-Die Passwörter sind vor dem produktiven Einsatz zu ändern.
+Konten entstehen ausschliesslich über die Registrierung in der Anwendung; zugelassen sind Adressen
+`@immotrustag.ch` sowie `jonathanslehner@gmail.com`, das automatisch die Admin-Rolle erhält. Der
+Bestand enthält ausschliesslich die von den Mitarbeitenden hochgeladenen Aufzeichnungen – es
+werden keine Beispieldaten erzeugt.
 
 ## Aufbau
 
@@ -70,7 +55,7 @@ Die Passwörter sind vor dem produktiven Einsatz zu ändern.
 | `src/app/api/upload` | Entgegennahme der Audiodateien inklusive Signaturprüfung |
 | `src/app/api/audio/[id]` | Ausliefern der Aufnahme mit Bereichsanfragen und signiertem Token |
 | `src/lib` | Datenzugriff, Authentifizierung, Dateinamensanalyse, Transkription |
-| `scripts` | Bildgenerierung, WebP-Varianten, Demodaten, Funktions- und Leistungstest |
+| `scripts` | Bildgenerierung, WebP-Varianten, Funktions- und Leistungstest |
 
 ## Prüfung
 
@@ -78,7 +63,7 @@ Die Passwörter sind vor dem produktiven Einsatz zu ändern.
 npm run build
 npm run start -- -p 3010
 
-node scripts/browser-check.mjs   # vollständiger Funktionsdurchlauf im echten Browser
+ADMIN_PASSWORD=… node scripts/browser-check.mjs   # vollständiger Funktionsdurchlauf im echten Browser
 node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
 node scripts/check-reset-link.mjs http://localhost:3010  # kein Reset-Link in der Oberfläche
@@ -88,7 +73,10 @@ npx tsx --env-file=.env.local --conditions=react-server scripts/cleanup-testdata
 `browser-check.mjs` durchläuft Registrierung, Bestätigung, Anmeldung, Passwort-vergessen, Übersicht mit
 Suche, Filtern, Sortierung und Seitennavigation, die Detailansicht mit Player und Transkript,
 Sammelupload inklusive Drag-and-drop und Korrektur-Modal sowie das gesamte Admin-Dashboard bis zur
-endgültigen Löschung. `cleanup-testdata.mts` entfernt anschliessend die dabei entstandenen
+endgültigen Löschung. Suchbegriff, Filterwerte und die geprüfte Detailansicht leitet das Skript aus
+dem vorhandenen Bestand ab, es setzt also keine bestimmten Aufnahmen voraus. Für den Admin-Teil
+meldet es sich mit `ADMIN_EMAIL` (Vorgabe: der Superuser) und `ADMIN_PASSWORD` an; das Passwort
+liegt nicht im Repository. `cleanup-testdata.mts` entfernt anschliessend die dabei entstandenen
 Testkonten, Testaufnahmen, Kommentare und Bewertungen.
 
 Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.

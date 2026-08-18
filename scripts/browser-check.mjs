@@ -10,6 +10,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const BASE = process.env.BASE ?? "http://localhost:3010";
+// Zugang für den Admin-Teil der Prüfung. Das Passwort steht bewusst nicht im
+// Repository, es gehört dem Konto der Kundschaft.
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "jonathanslehner@gmail.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+if (!ADMIN_PASSWORD) {
+  console.error(
+    "ADMIN_PASSWORD fehlt. Der Admin-Teil der Prüfung meldet sich als Superuser an:\n" +
+      "  ADMIN_PASSWORD=… node scripts/browser-check.mjs",
+  );
+  process.exit(1);
+}
 const OUT = join(tmpdir(), "gaz-check");
 mkdirSync(OUT, { recursive: true });
 
@@ -88,6 +99,35 @@ async function waitFor(check, { timeout = 25000, interval = 500 } = {}) {
     if (Date.now() > deadline) return false;
     await page.waitForTimeout(interval);
   }
+}
+
+/**
+ * Trefferzahl aus der Kopfzeile der Übersicht. Zeilen zu zählen wäre
+ * ungenau, weil bei leerem Ergebnis eine Hinweiszeile und bei einer Suche
+ * zusätzliche Trefferzeilen in der Tabelle stehen.
+ */
+async function listedCount() {
+  const info = (await page.locator("h1 + p").first().innerText()).trim();
+  const match = /^([\d'’.\s]+)/.exec(info);
+  return match ? Number(match[1].replace(/\D/g, "")) : 0;
+}
+
+/** Liest die Datenzeilen der Übersicht; Trefferzeilen bleiben unberücksichtigt. */
+async function readRows() {
+  return page.$$eval("tbody tr", (rows) =>
+    rows
+      .filter((row) => row.querySelectorAll("td").length >= 9)
+      .map((row) => {
+        const cells = [...row.querySelectorAll("td")].map((cell) => cell.innerText.trim());
+        return { datum: cells[0], uploader: cells[5], bewertung: cells[6], status: cells[7] };
+      }),
+  );
+}
+
+/** Wandelt „01.06.2026, 13:07“ in „2026-06-01“ für die Datumsfelder. */
+function isoDay(cell) {
+  const match = /(\d{2})\.(\d{2})\.(\d{4})/.exec(cell ?? "");
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
 }
 
 /* 1 – Öffentliche Seiten */
@@ -233,15 +273,75 @@ record("Aufnahmenübersicht zeigt Zeilen", rowCount > 0, `${rowCount} Zeilen`);
 await shot("06-uebersicht");
 
 // Ausgangsbestand für den Abschlussvergleich: Der Testlauf darf ausser seinen
-// eigenen Aufnahmen nichts entfernen.
+// eigenen Aufnahmen nichts entfernen und keine bestehende Löschmarkierung
+// auflösen.
 await visit(`/aufnahmen?pageSize=100`);
-const stockBefore = await page.locator("tbody tr").count();
+const stockBefore = await listedCount();
+await visit(`/aufnahmen?loeschstatus=nur_markiert&pageSize=100`);
+const flaggedBefore = await listedCount();
 
-await page.fill("#q", "Nebenkosten");
+/* 7a – Prüfwerte aus dem vorhandenen Bestand ableiten
+   Suchbegriff und Detailansicht stammen aus einer tatsächlich vorhandenen
+   Aufnahme, damit die Prüfung an keinen bestimmten Datenbestand gebunden ist.
+   Gewählt wird das Transkript mit den meisten Sprechern und Sätzen. */
+await visit(`/aufnahmen?status=abgeschlossen&pageSize=100`);
+const detailHrefs = await page.$$eval('tbody tr a[href^="/aufnahmen/rec_"]', (nodes) => [
+  ...new Set(nodes.map((node) => node.getAttribute("href"))),
+]);
+let sample = null;
+for (const href of detailHrefs.slice(0, 6)) {
+  await visit(href);
+  const hasTranscript = await page
+    .locator('[id^="satz-"]')
+    .first()
+    .waitFor({ timeout: 30000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!hasTranscript) continue;
+  const info = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('[id^="satz-"]')];
+    const speakers = new Set(
+      rows.flatMap((row) => [...row.querySelectorAll(".badge")].map((badge) => badge.textContent.trim())),
+    );
+    const words = rows.flatMap((row) =>
+      [...row.querySelectorAll('span[role="button"]')].map((span) =>
+        span.textContent.trim().replace(/[^A-Za-zÄÖÜäöüß-]/g, ""),
+      ),
+    );
+    const candidates = words.filter((word) => word.length >= 5 && word.length <= 20);
+    candidates.sort((a, b) => b.length - a.length);
+    return { sentences: rows.length, speakers: speakers.size, needle: candidates[0] ?? "" };
+  });
+  if (!info.needle) continue;
+  const better =
+    !sample ||
+    info.speakers > sample.speakers ||
+    (info.speakers === sample.speakers && info.sentences > sample.sentences);
+  if (better) sample = { href, ...info };
+  if (sample.speakers >= 2 && sample.sentences >= 5) break;
+}
+record(
+  "Transkribierte Aufnahme für Suche und Detailansicht gefunden",
+  Boolean(sample),
+  sample ? `${sample.href} · ${sample.sentences} Sätze · Suchbegriff „${sample.needle}“` : "kein Transkript im Bestand",
+);
+if (!sample) {
+  console.log("\nOhne transkribierte Aufnahme lassen sich Suche und Detailansicht nicht prüfen.");
+  await browser.close();
+  process.exit(1);
+}
+const needle = sample.needle;
+
+await visit(`/aufnahmen`);
+await page.fill("#q", needle);
 await page.click('button:has-text("Anwenden")');
-await page.waitForURL(/q=Nebenkosten/);
+await page.waitForURL(/q=/);
 const markCount = await page.locator("mark").count();
-record("Volltextsuche mit hervorgehobenem Ausschnitt", markCount > 0, `${markCount} Hervorhebungen`);
+record(
+  "Volltextsuche mit hervorgehobenem Ausschnitt",
+  markCount > 0,
+  `${markCount} Hervorhebungen für „${needle}“`,
+);
 await shot("07-suche");
 
 /* 7b – Tabellenspalten */
@@ -263,27 +363,55 @@ const missingHeaders = expectedHeaders.filter(
 );
 record("Tabelle zeigt alle geforderten Spalten", missingHeaders.length === 0, missingHeaders.join(", "));
 
-/* 7c – Filter */
-const allRows = await page.locator("tbody tr").count();
-await page.selectOption("#uploader", { label: "Lena Brunner" });
+/* 7c – Filter, Werte aus dem vorhandenen Bestand abgeleitet */
+await visit(`/aufnahmen?pageSize=100`);
+const allRows = await listedCount();
+const stockRows = await readRows();
+const doneRows = stockRows.filter((row) => row.status.includes("Abgeschlossen"));
+const uploaderLabel = doneRows[0]?.uploader ?? stockRows[0]?.uploader ?? "";
+const targetRows = doneRows.filter((row) => row.uploader === uploaderLabel);
+const days = targetRows.map((row) => isoDay(row.datum)).filter(Boolean).sort();
+const stockScores = targetRows
+  .map((row) => Number(/(\d+(?:[.,]\d)?)/.exec(row.bewertung)?.[1].replace(",", ".") ?? NaN))
+  .filter((value) => Number.isFinite(value));
+
+await visit(`/aufnahmen`);
+await page.selectOption("#uploader", { label: uploaderLabel });
 await page.selectOption("#status", "abgeschlossen");
 await page.selectOption("#loeschstatus", "ohne_markiert");
-await page.fill("#von", "2026-06-01");
-await page.fill("#bis", "2026-06-30");
-await page.fill('input[aria-label="Bewertung von"]', "5");
-await page.fill('input[aria-label="Bewertung bis"]', "10");
+if (days.length > 0) {
+  await page.fill("#von", days[0]);
+  await page.fill("#bis", days[days.length - 1]);
+}
+// Bewertungen bestehen erst, wenn sie jemand vergeben hat; ohne Bewertung im
+// Bestand bliebe der Filter ohne Treffer und wäre nicht prüfbar.
+if (stockScores.length > 0) {
+  await page.fill('input[aria-label="Bewertung von"]', String(Math.floor(Math.min(...stockScores))));
+  await page.fill('input[aria-label="Bewertung bis"]', String(Math.ceil(Math.max(...stockScores))));
+}
 await page.click('button:has-text("Anwenden")');
 await page.waitForURL(/uploader=/);
-const filteredRows = await page.locator("tbody tr").count();
+const filteredRows = await listedCount();
 const uploaderCells = await page.locator("tbody tr td:nth-child(6)").allInnerTexts();
 const statusCells = await page.locator("tbody tr td:nth-child(8)").allInnerTexts();
+const flagCells = await page.locator("tbody tr td:nth-child(9)").allInnerTexts();
 record(
   "Filter nach Autor, Status, Datum, Bewertung und Löschstatus",
   filteredRows > 0 &&
-    filteredRows < allRows &&
-    uploaderCells.every((cell) => cell.includes("Lena Brunner")) &&
-    statusCells.every((cell) => cell.includes("Abgeschlossen")),
-  `${filteredRows} von ${allRows} Zeilen`,
+    filteredRows <= allRows &&
+    uploaderCells.every((cell) => cell.includes(uploaderLabel)) &&
+    statusCells.every((cell) => cell.includes("Abgeschlossen")) &&
+    flagCells.every((cell) => !cell.includes("vorgemerkt")),
+  `${filteredRows} von ${allRows} Zeilen · ${uploaderLabel}${stockScores.length > 0 ? " · mit Bewertungsbereich" : ""}`,
+);
+// Gegenprobe: ein Zeitraum ohne Gespräche muss den Bestand leer filtern.
+await visit(`/aufnahmen?von=2000-01-01&bis=2000-01-02&pageSize=100`);
+const emptyResult = await listedCount();
+const emptyNotice = await page.locator("tbody tr").first().innerText();
+record(
+  "Filter grenzt den Bestand tatsächlich ein",
+  emptyResult === 0 && emptyNotice.includes("Keine Aufnahme entspricht"),
+  `${emptyResult} Treffer im leeren Zeitraum`,
 );
 record(
   "Filter lassen sich zurücksetzen",
@@ -332,8 +460,10 @@ if (hasPager) {
 }
 await shot("07c-seiten");
 
-await visit(`/aufnahmen?q=Nebenkosten`);
-const hitLink = page.locator('a[href*="?t="]').first();
+await visit(`/aufnahmen?q=${encodeURIComponent(needle)}`);
+// Gezielt der Treffer der geprüften Aufnahme, damit die Detailansicht auf einem
+// vollständigen Transkript arbeitet.
+const hitLink = page.locator(`a[href^="${sample.href}?t="]`).first();
 const hasHit = (await hitLink.count()) > 0;
 if (hasHit) {
   const href = await hitLink.getAttribute("href");
@@ -384,7 +514,8 @@ await page.waitForTimeout(400);
 const scrubbed = await page.evaluate(() => document.querySelector("audio")?.currentTime ?? 0);
 record("Scrubbing über die Bedienelemente", scrubbed > 0, `${scrubbed.toFixed(1)} s`);
 
-const sentence = page.locator('[id^="satz-"]').nth(4);
+const sentences = page.locator('[id^="satz-"]');
+const sentence = sentences.nth(Math.min(4, (await sentences.count()) - 1));
 await sentence.locator("span[role='button']").first().click();
 await page.waitForTimeout(800);
 const seeked = await page.evaluate(() => document.querySelector("audio")?.currentTime ?? 0);
@@ -399,10 +530,12 @@ const highlighted = await page.evaluate(() => {
 });
 record("Aktuell gesprochene Passage hervorgehoben", Boolean(highlighted), highlighted ?? "keine");
 const speakerBadges = await page.locator('[id^="satz-"] .badge').allInnerTexts();
+// Ein Gespräch kann auch nur eine sprechende Person enthalten; geprüft wird,
+// dass jede erkannte Person im Transkript ausgewiesen ist.
 record(
   "Transkript nach Sprecher gegliedert",
-  new Set(speakerBadges).size >= 2,
-  [...new Set(speakerBadges)].join(", "),
+  new Set(speakerBadges).size === sample.speakers && sample.speakers >= 1,
+  `${new Set(speakerBadges).size} von ${sample.speakers}: ${[...new Set(speakerBadges)].join(", ")}`,
 );
 await page.click('button:has-text("Pause")');
 
@@ -423,10 +556,10 @@ const missingTerms = expectedTerms.filter((term) => !metaTerms.includes(term));
 record("Alle Metadaten sowie Upload- und Transkriptionsstatus sichtbar", missingTerms.length === 0, missingTerms.join(", "));
 await shot("08-detail");
 
-await page.fill('input[aria-label="Im Transkript suchen"]', "Wohnung");
+await page.fill('input[aria-label="Im Transkript suchen"]', needle);
 await page.waitForTimeout(400);
 const matchInfo = await page.locator("text=/Treffer \\d+ von \\d+|Kein Treffer/").first().innerText();
-record("Suche im Transkript", matchInfo.length > 0, matchInfo);
+record("Suche im Transkript", /Treffer \d+ von \d+/.test(matchInfo), `„${needle}“ – ${matchInfo}`);
 await page.click('button[aria-label="Nächster Treffer"]');
 await page.waitForTimeout(500);
 
@@ -555,8 +688,8 @@ await page.waitForURL(/anmelden/);
 record("Abmelden funktioniert", true);
 
 /* 13 – Superuser */
-await page.fill("#email", "jonathanslehner@gmail.com");
-await page.fill("#password", "Immotrust2026!");
+await page.fill("#email", ADMIN_EMAIL);
+await page.fill("#password", ADMIN_PASSWORD);
 await page.click('button[type="submit"]');
 await page.waitForURL(/aufnahmen/);
 await visit(`/admin`);
@@ -695,18 +828,20 @@ for (const name of TEST_NAMES) {
 }
 record("Endgültiges Löschen entfernt die Aufnahmen", removedAll, TEST_NAMES.join(", "));
 
-/* 15 – Demobestand vollständig und unverändert */
+/* 15 – Bestand vollständig und unverändert */
 await visit(`/aufnahmen?pageSize=100`);
-const finalRows = await page.locator("tbody tr").count();
+const finalRows = await listedCount();
 record(
   "Bestand nach der Prüfung unverändert",
   finalRows === stockBefore,
   `${finalRows} von zuvor ${stockBefore} Aufnahmen`,
 );
-await visit(`/aufnahmen?loeschstatus=nur_markiert`);
+await visit(`/aufnahmen?loeschstatus=nur_markiert&pageSize=100`);
+const flaggedAfter = await listedCount();
 record(
-  "Bestehende Löschmarkierung weiterhin vorhanden",
-  (await page.locator("tbody tr", { hasText: "Lena Brunner" }).count()) > 0,
+  "Bestehende Löschmarkierungen unverändert",
+  flaggedAfter === flaggedBefore,
+  `${flaggedAfter} von zuvor ${flaggedBefore} vorgemerkten Aufnahmen`,
 );
 await shot("15-nach-loeschung");
 
