@@ -70,6 +70,7 @@ export async function createRecording(
     transcriptionError: null,
     transcriptionStartedAt: null,
     transcriptionFinishedAt: null,
+    transcriptionNextAttemptAt: null,
     transcriptionAttempts: 0,
     speakerCount: null,
     wordCount: null,
@@ -97,6 +98,7 @@ export async function createRecording(
     startedAt: null,
     finishedAt: null,
     lockedAt: null,
+    nextAttemptAt: null,
     originalFilename: input.originalFilename,
   });
   return { created: true, recording: doc };

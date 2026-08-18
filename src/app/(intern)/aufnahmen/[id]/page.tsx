@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { signPlaybackToken } from "@/lib/audio";
 import { Collections, findById } from "@/lib/db";
 import { getRecording, listComments, listRatings } from "@/lib/recordings";
-import { loadTranscript } from "@/lib/transcription";
+import { loadTranscript, sweepQueue } from "@/lib/transcription";
 import { formatDateTime, formatDateTimeWithSeconds, formatDuration } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { RecordingPlayerPanel } from "@/components/recording-player-panel";
@@ -52,8 +53,15 @@ export default async function AufnahmeDetailPage({
   const audioSrc = `/api/audio/${id}?token=${encodeURIComponent(token)}`;
   const startMs = Number(Array.isArray(query.t) ? query.t[0] : query.t) || 0;
   const initialQuery = String((Array.isArray(query.q) ? query.q[0] : query.q) ?? "");
+  const failed = recording.transcriptionStatus === "fehlgeschlagen";
   const pending =
     recording.transcriptionStatus === "wartend" || recording.transcriptionStatus === "in_arbeit";
+  const nextAttemptAt = recording.transcriptionNextAttemptAt ?? job?.nextAttemptAt ?? null;
+  const nextAttemptLabel =
+    failed && nextAttemptAt ? formatDateTimeWithSeconds(nextAttemptAt) : null;
+
+  // Fällige Wiederholungen anstossen, ohne die Antwort zu verzögern.
+  after(() => sweepQueue());
 
   const metadata: [string, React.ReactNode][] = [
     ["Anrufer", recording.callerName],
@@ -74,12 +82,15 @@ export default async function AufnahmeDetailPage({
     ["Upload-Zeitpunkt", formatDateTimeWithSeconds(recording.uploadedAt)],
     ["Transkription", <StatusBadge key="s" status={recording.transcriptionStatus} />],
     [
-      "Transkription abgeschlossen",
+      failed ? "Letzter Versuch" : "Transkription abgeschlossen",
       recording.transcriptionFinishedAt
         ? formatDateTimeWithSeconds(recording.transcriptionFinishedAt)
         : "–",
     ],
-    ["Versuche", String(job?.attempts ?? 0)],
+    ...(nextAttemptLabel
+      ? ([["Nächster automatischer Versuch", `${nextAttemptLabel} Uhr`]] as [string, React.ReactNode][])
+      : []),
+    ["Versuche", String(job?.attempts ?? recording.transcriptionAttempts ?? 0)],
     [
       "Sprecher / Wörter",
       recording.speakerCount
@@ -126,14 +137,21 @@ export default async function AufnahmeDetailPage({
         </div>
       )}
 
-      {pending && <TranscriptionWatcher ids={[recording._id]} />}
+      {(pending || nextAttemptLabel) && (
+        <TranscriptionWatcher
+          entries={[{ id: recording._id, status: recording.transcriptionStatus }]}
+        />
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <RecordingPlayerPanel
           audioSrc={audioSrc}
+          recordingId={recording._id}
           segments={segments}
           status={recording.transcriptionStatus}
           errorMessage={recording.transcriptionError}
+          nextAttemptLabel={nextAttemptLabel}
+          lastAttemptAt={recording.transcriptionFinishedAt}
           startMs={startMs}
           initialQuery={initialQuery}
         />

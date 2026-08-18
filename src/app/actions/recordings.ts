@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { Collections, findById, findMany, insertOne, upsertById } from "@/lib/db";
@@ -11,7 +12,12 @@ import {
   refreshRatingSummary,
   setDeletionFlag,
 } from "@/lib/recordings";
-import { runPendingJobs } from "@/lib/transcription";
+import {
+  requeueTranscription,
+  runPendingJobs,
+  transcribeRecording,
+  type RequeueResult,
+} from "@/lib/transcription";
 import { getTemplateSettings } from "@/lib/settings";
 import { parseFilename } from "@/lib/filename-template";
 import { mimeFromExtension, fingerprintOf, MAX_UPLOAD_BYTES } from "@/lib/audio";
@@ -119,22 +125,31 @@ export type StatusUpdate = {
   id: string;
   status: TranscriptionStatus;
   error: string | null;
+  nextAttemptAt: string | null;
   wordCount: number | null;
   speakerCount: number | null;
 };
 
 /**
- * Liefert den aktuellen Transkriptionsstatus und stösst dabei offene Aufträge
- * an. Die Oberfläche fragt nur so lange nach, wie Aufträge offen sind.
+ * Liefert den aktuellen Transkriptionsstatus und stösst dabei offene sowie
+ * fällige Aufträge an. Die Oberfläche fragt nur so lange nach, wie Aufträge
+ * offen sind oder eine automatische Wiederholung aussteht.
  */
 export async function transcriptionStatusAction(ids: string[]): Promise<StatusUpdate[]> {
   await requireUser();
   if (ids.length === 0) return [];
   const rows = await findMany<Recording>(Collections.recordings, { _id: { $in: ids.slice(0, 100) } });
+  const now = new Date().toISOString();
   const pending = rows.some(
     (row) => row.transcriptionStatus === "wartend" || row.transcriptionStatus === "in_arbeit",
   );
-  if (pending) {
+  const retryDue = rows.some(
+    (row) =>
+      row.transcriptionStatus === "fehlgeschlagen" &&
+      !!row.transcriptionNextAttemptAt &&
+      row.transcriptionNextAttemptAt <= now,
+  );
+  if (pending || retryDue) {
     await runPendingJobs(1);
     const refreshed = await findMany<Recording>(Collections.recordings, {
       _id: { $in: ids.slice(0, 100) },
@@ -149,9 +164,37 @@ function toStatusUpdate(row: Recording): StatusUpdate {
     id: row._id,
     status: row.transcriptionStatus,
     error: row.transcriptionError,
+    nextAttemptAt: row.transcriptionNextAttemptAt ?? null,
     wordCount: row.wordCount,
     speakerCount: row.speakerCount,
   };
+}
+
+/* ------------------------------------------------------- Transkription neu starten */
+
+/**
+ * Startet die Transkription einer Aufnahme neu. Die Funktion steht allen
+ * angemeldeten Mitarbeitenden offen und ist idempotent – ein zweiter Aufruf
+ * meldet lediglich, dass der Auftrag bereits läuft.
+ */
+export async function restartTranscriptionAction(recordingId: string): Promise<RequeueResult> {
+  await requireUser();
+  const result = await requeueTranscription(recordingId);
+
+  if (result.state === "gestartet") {
+    after(async () => {
+      try {
+        await transcribeRecording(recordingId);
+      } catch {
+        /* Der Fehler wird am Auftrag festgehalten. */
+      }
+    });
+  }
+
+  revalidatePath("/aufnahmen");
+  revalidatePath(`/aufnahmen/${recordingId}`);
+  revalidatePath("/admin");
+  return result;
 }
 
 /* ----------------------------------------------------------- Löschmarkierung */

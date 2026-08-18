@@ -43,6 +43,8 @@ export type Recording = {
   transcriptionError: string | null;
   transcriptionStartedAt: string | null;
   transcriptionFinishedAt: string | null;
+  /** Zeitpunkt, ab dem das System einen fehlgeschlagenen Auftrag selbst wiederholt. */
+  transcriptionNextAttemptAt: string | null;
   transcriptionAttempts: number;
   speakerCount: number | null;
   wordCount: number | null;
@@ -129,6 +131,8 @@ export type Job = {
   startedAt: string | null;
   finishedAt: string | null;
   lockedAt: string | null;
+  /** Fälligkeit der nächsten automatischen Wiederholung, `null` wenn keine mehr aussteht. */
+  nextAttemptAt: string | null;
   originalFilename: string;
 };
 

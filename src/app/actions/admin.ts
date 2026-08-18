@@ -11,7 +11,7 @@ import {
 } from "@/lib/filename-template";
 import { saveTemplate } from "@/lib/settings";
 import { getRecording, hardDeleteRecording } from "@/lib/recordings";
-import { resetJob, runPendingJobs, transcribeRecording } from "@/lib/transcription";
+import { requeueTranscription, runPendingJobs, transcribeRecording } from "@/lib/transcription";
 
 export type TemplatePreview = {
   validation: TemplateValidation;
@@ -85,19 +85,25 @@ export async function retryTranscriptionAction(
   const recording = await getRecording(recordingId);
   if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
 
-  await resetJob(recordingId);
-  after(async () => {
-    try {
-      await transcribeRecording(recordingId);
-    } catch {
-      /* Der Fehler wird am Auftrag festgehalten. */
-    }
-  });
+  const result = await requeueTranscription(recordingId, { allowCompleted: true });
+  if (result.state === "gestartet") {
+    after(async () => {
+      try {
+        await transcribeRecording(recordingId);
+      } catch {
+        /* Der Fehler wird am Auftrag festgehalten. */
+      }
+    });
+  }
   revalidatePath("/admin");
+  revalidatePath("/aufnahmen");
   revalidatePath(`/aufnahmen/${recordingId}`);
   return {
-    ok: true,
-    message: `Transkription für ${recording.originalFilename} neu gestartet.`,
+    ok: result.ok,
+    message:
+      result.state === "gestartet"
+        ? `Transkription für ${recording.originalFilename} neu gestartet.`
+        : result.message,
   };
 }
 

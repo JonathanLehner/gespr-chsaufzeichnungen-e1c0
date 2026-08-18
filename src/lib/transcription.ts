@@ -1,5 +1,13 @@
 import "server-only";
-import { Collections, deleteMany, findById, findMany, insertMany, updateOne, upsertById } from "./db";
+import {
+  Collections,
+  deleteMany,
+  findById,
+  findMany,
+  insertMany,
+  updateOne,
+  upsertById,
+} from "./db";
 import { platformGemini } from "./platform";
 import { invalidateRecordingCache } from "./recordings";
 import type {
@@ -16,6 +24,15 @@ const MODEL = "gemini-2.5-flash";
 export const MAX_ATTEMPTS = 3;
 const STALE_LOCK_MS = 10 * 60 * 1000;
 const MAX_PART_BYTES = 350 * 1024; // Grenze des Datenbank-Endpunkts ist 1 MB
+
+/**
+ * Wartezeit bis zur nächsten automatischen Wiederholung, gemessen an der Zahl
+ * der bisherigen Versuche. Ein sofortiger zweiter Anlauf hilft bei einer
+ * Zeitüberschreitung des Dienstes nicht weiter, deshalb der zeitliche Abstand.
+ */
+const RETRY_DELAYS_MS = [3 * 60 * 1000, 15 * 60 * 1000];
+/** Mindestabstand zwischen zwei Warteschlangenläufen je Serverinstanz. */
+const SWEEP_INTERVAL_MS = 30 * 1000;
 
 const PROMPT = `Du bist ein professioneller Transkriptionsdienst für deutschsprachige Verkaufsgespräche einer Immobilienfirma.
 
@@ -204,46 +221,91 @@ export async function loadTranscript(recordingId: string): Promise<TranscriptSeg
 
 /* --------------------------------------------------------------- Auftrags-Lauf */
 
+/**
+ * Übernimmt einen Auftrag exklusiv. Fehlgeschlagene Aufträge werden nur so
+ * lange wieder aufgenommen, wie noch Versuche offen sind; die Fälligkeit der
+ * Wiederholung prüft der Aufrufer.
+ */
 async function claimJob(recordingId: string): Promise<boolean> {
   const now = new Date().toISOString();
   const stale = new Date(Date.now() - STALE_LOCK_MS).toISOString();
-  const fresh = await updateOne(
+  const lock = { status: "in_arbeit", startedAt: now, lockedAt: now, nextAttemptAt: null };
+
+  const waiting = await updateOne(
     Collections.jobs,
-    { _id: recordingId, status: { $in: ["wartend", "fehlgeschlagen"] } },
-    { $set: { status: "in_arbeit", startedAt: now, lockedAt: now }, $inc: { attempts: 1 } },
+    { _id: recordingId, status: "wartend" },
+    { $set: lock, $inc: { attempts: 1 } },
   );
-  if (fresh.modified === 1) return true;
+  if (waiting.modified === 1) return true;
+
+  const failed = await updateOne(
+    Collections.jobs,
+    { _id: recordingId, status: "fehlgeschlagen", attempts: { $lt: MAX_ATTEMPTS } },
+    { $set: lock, $inc: { attempts: 1 } },
+  );
+  if (failed.modified === 1) return true;
+
   const recovered = await updateOne(
     Collections.jobs,
     { _id: recordingId, status: "in_arbeit", lockedAt: { $lt: stale } },
-    { $set: { status: "in_arbeit", startedAt: now, lockedAt: now }, $inc: { attempts: 1 } },
+    { $set: lock, $inc: { attempts: 1 } },
   );
   return recovered.modified === 1;
 }
 
+type StatusExtras = {
+  lastError?: string | null;
+  attempts?: number;
+  nextAttemptAt?: string | null;
+};
+
 async function setStatus(
   recordingId: string,
   status: Job["status"],
-  extras: Record<string, unknown> = {},
+  extras: StatusExtras = {},
 ): Promise<void> {
   const now = new Date().toISOString();
+  const closed = status === "abgeschlossen" || status === "fehlgeschlagen";
+  const nextAttemptAt = extras.nextAttemptAt ?? null;
+
+  const jobFields: Record<string, unknown> = {
+    status,
+    finishedAt: closed ? now : null,
+    nextAttemptAt,
+  };
+  if (extras.lastError !== undefined) jobFields.lastError = extras.lastError;
+
   await Promise.all([
-    updateOne(Collections.jobs, { _id: recordingId }, { $set: { status, ...extras, finishedAt: status === "abgeschlossen" || status === "fehlgeschlagen" ? now : null } }),
+    updateOne(Collections.jobs, { _id: recordingId }, { $set: jobFields }),
     updateOne(
       Collections.recordings,
       { _id: recordingId },
       {
         $set: {
           transcriptionStatus: status,
-          transcriptionError: (extras.lastError as string | null) ?? null,
-          transcriptionFinishedAt:
-            status === "abgeschlossen" || status === "fehlgeschlagen" ? now : null,
+          transcriptionError: extras.lastError ?? null,
+          transcriptionFinishedAt: closed ? now : null,
+          transcriptionNextAttemptAt: nextAttemptAt,
+          ...(extras.attempts !== undefined ? { transcriptionAttempts: extras.attempts } : {}),
           ...(status === "in_arbeit" ? { transcriptionStartedAt: now } : {}),
         },
       },
     ),
   ]);
   invalidateRecordingCache();
+}
+
+/** Fälligkeit der nächsten automatischen Wiederholung nach `attempts` Versuchen. */
+function nextAttemptAfter(attempts: number): string | null {
+  if (attempts >= MAX_ATTEMPTS) return null;
+  const delay = RETRY_DELAYS_MS[Math.min(Math.max(attempts, 1), RETRY_DELAYS_MS.length) - 1];
+  return new Date(Date.now() + delay).toISOString();
+}
+
+/** Ein fehlgeschlagener Auftrag darf laufen, sobald die Wartezeit abgelaufen ist. */
+function retryIsDue(job: Job, now: string): boolean {
+  if (job.attempts >= MAX_ATTEMPTS) return false;
+  return !job.nextAttemptAt || job.nextAttemptAt <= now;
 }
 
 /**
@@ -258,14 +320,22 @@ export async function transcribeRecording(recordingId: string): Promise<
 
   const job = await findById<Job>(Collections.jobs, recordingId);
   if (job && job.status === "abgeschlossen") return { ok: true };
-  if (job && job.attempts >= MAX_ATTEMPTS && job.status === "fehlgeschlagen") {
-    return { ok: false, error: job.lastError ?? "Maximale Anzahl Versuche erreicht.", skipped: true };
+  if (job && job.status === "fehlgeschlagen" && !retryIsDue(job, new Date().toISOString())) {
+    return {
+      ok: false,
+      error:
+        job.attempts >= MAX_ATTEMPTS
+          ? job.lastError ?? "Maximale Anzahl Versuche erreicht."
+          : "Die automatische Wiederholung ist noch nicht fällig.",
+      skipped: true,
+    };
   }
   if (!(await claimJob(recordingId))) {
     return { ok: false, error: "Der Auftrag wird bereits bearbeitet.", skipped: true };
   }
 
-  await setStatus(recordingId, "in_arbeit");
+  const attempts = (await findById<Job>(Collections.jobs, recordingId))?.attempts ?? 1;
+  await setStatus(recordingId, "in_arbeit", { attempts });
 
   try {
     const response = await platformGemini({
@@ -294,25 +364,37 @@ export async function transcribeRecording(recordingId: string): Promise<
         },
       },
     );
-    await setStatus(recordingId, "abgeschlossen", { lastError: null });
+    await setStatus(recordingId, "abgeschlossen", { lastError: null, attempts });
     return { ok: true };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unbekannter Fehler bei der Transkription.";
-    await setStatus(recordingId, "fehlgeschlagen", { lastError: message.slice(0, 400) });
+    await setStatus(recordingId, "fehlgeschlagen", {
+      lastError: message.slice(0, 400),
+      attempts,
+      nextAttemptAt: nextAttemptAfter(attempts),
+    });
     return { ok: false, error: message };
   }
 }
 
-/** Arbeitet offene Aufträge ab. Wird nach dem Upload und beim Statusabruf aufgerufen. */
+/**
+ * Arbeitet offene Aufträge ab: wartende, hängengebliebene und fehlgeschlagene,
+ * deren Wartezeit abgelaufen ist. Wird nach dem Upload, beim Statusabruf und
+ * beim Aufruf der Aufnahmeseiten angestossen.
+ */
 export async function runPendingJobs(limit = 2): Promise<number> {
+  const now = new Date().toISOString();
   const stale = new Date(Date.now() - STALE_LOCK_MS).toISOString();
-  const waiting = await findMany<Job>(Collections.jobs, { status: "wartend" });
-  const stuck = await findMany<Job>(Collections.jobs, {
-    status: "in_arbeit",
-    lockedAt: { $lt: stale },
-  });
-  const queue = [...waiting, ...stuck]
+  const [waiting, stuck, failed] = await Promise.all([
+    findMany<Job>(Collections.jobs, { status: "wartend" }),
+    findMany<Job>(Collections.jobs, { status: "in_arbeit", lockedAt: { $lt: stale } }),
+    findMany<Job>(Collections.jobs, {
+      status: "fehlgeschlagen",
+      attempts: { $lt: MAX_ATTEMPTS },
+    }),
+  ]);
+  const queue = [...waiting, ...stuck, ...failed.filter((job) => retryIsDue(job, now))]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .slice(0, limit);
   let done = 0;
@@ -323,17 +405,109 @@ export async function runPendingJobs(limit = 2): Promise<number> {
   return done;
 }
 
-/** Setzt einen fehlgeschlagenen Auftrag zurück (Admin-Funktion). */
+let lastSweepAt = 0;
+
+/**
+ * Stösst fällige Aufträge im Hintergrund an, höchstens alle 30 Sekunden je
+ * Serverinstanz. So werden fehlgeschlagene Aufträge auch dann wiederholt, wenn
+ * niemand eine laufende Transkription beobachtet.
+ */
+export async function sweepQueue(limit = 1): Promise<number> {
+  const now = Date.now();
+  if (now - lastSweepAt < SWEEP_INTERVAL_MS) return 0;
+  lastSweepAt = now;
+  try {
+    return await runPendingJobs(limit);
+  } catch {
+    return 0;
+  }
+}
+
+/** Setzt einen Auftrag auf „wartend“ zurück und gibt alle Versuche wieder frei. */
 export async function resetJob(recordingId: string): Promise<void> {
   await updateOne(
     Collections.jobs,
     { _id: recordingId },
-    { $set: { status: "wartend", attempts: 0, lastError: null, lockedAt: null, finishedAt: null } },
+    {
+      $set: {
+        status: "wartend",
+        attempts: 0,
+        lastError: null,
+        lockedAt: null,
+        startedAt: null,
+        finishedAt: null,
+        nextAttemptAt: null,
+      },
+    },
   );
   await updateOne(
     Collections.recordings,
     { _id: recordingId },
-    { $set: { transcriptionStatus: "wartend", transcriptionError: null } },
+    {
+      $set: {
+        transcriptionStatus: "wartend",
+        transcriptionError: null,
+        transcriptionAttempts: 0,
+        transcriptionFinishedAt: null,
+        transcriptionNextAttemptAt: null,
+      },
+    },
   );
   invalidateRecordingCache();
+}
+
+/* ------------------------------------------------------------ Neustart durch Nutzende */
+
+export type RequeueState = "gestartet" | "laeuft" | "fehler";
+export type RequeueResult = { ok: boolean; message: string; state: RequeueState };
+
+/**
+ * Reiht die Transkription einer Aufnahme neu ein. Der Aufruf ist idempotent:
+ * Läuft oder wartet der Auftrag bereits, wird er nicht ein zweites Mal
+ * eingereiht, damit ein Doppelklick keinen doppelten Lauf erzeugt.
+ */
+export async function requeueTranscription(
+  recordingId: string,
+  options: { allowCompleted?: boolean } = {},
+): Promise<RequeueResult> {
+  const recording = await findById<Recording>(Collections.recordings, recordingId);
+  if (!recording) return { ok: false, message: "Aufnahme nicht gefunden.", state: "fehler" };
+
+  const job = await findById<Job>(Collections.jobs, recordingId);
+  const stale = new Date(Date.now() - STALE_LOCK_MS).toISOString();
+
+  if (job && job.status === "in_arbeit" && (job.lockedAt ?? "") > stale) {
+    return { ok: true, message: "Die Transkription läuft bereits.", state: "laeuft" };
+  }
+  if (job && job.status === "wartend") {
+    return { ok: true, message: "Der Auftrag steht bereits in der Warteschlange.", state: "laeuft" };
+  }
+  if (job && job.status === "abgeschlossen" && !options.allowCompleted) {
+    return {
+      ok: false,
+      message: "Für diese Aufnahme liegt bereits ein Transkript vor.",
+      state: "fehler",
+    };
+  }
+
+  if (job) {
+    await resetJob(recordingId);
+  } else {
+    await upsertById(Collections.jobs, recordingId, {
+      recordingId,
+      type: "transkription",
+      status: "wartend",
+      attempts: 0,
+      lastError: null,
+      createdAt: recording.uploadedAt ?? new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+      lockedAt: null,
+      nextAttemptAt: null,
+      originalFilename: recording.originalFilename,
+    });
+    await setStatus(recordingId, "wartend", { lastError: null, attempts: 0 });
+  }
+
+  return { ok: true, message: "Die Transkription wurde neu eingereiht.", state: "gestartet" };
 }

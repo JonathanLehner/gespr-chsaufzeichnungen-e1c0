@@ -1,13 +1,17 @@
 import { Fragment } from "react";
 import Link from "next/link";
+import { after } from "next/server";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { listRecordings, type SortKey } from "@/lib/recordings";
+import { sweepQueue } from "@/lib/transcription";
+import { describeTranscriptionError } from "@/lib/transcription-errors";
 import { cetDayStartUtcIso, formatDateTime, formatDuration } from "@/lib/time";
 import { DeletionBadge, RatingValue, StatusBadge } from "@/components/status";
 import { RecordingsFilter, type FilterValues } from "@/components/recordings-filter";
 import { DeletionFlagButton } from "@/components/deletion-flag-button";
-import { TranscriptionWatcher } from "@/components/transcription-watcher";
+import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
+import { TranscriptionWatcher, type WatchedRecording } from "@/components/transcription-watcher";
 import type { TranscriptionStatus } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Aufnahmen" };
@@ -85,9 +89,19 @@ export default async function AufnahmenPage({
     values.loeschstatus !== "alle" ? values.loeschstatus : "",
   ].filter(Boolean).length;
 
-  const pendingIds = result.rows
-    .filter((row) => row.transcriptionStatus === "wartend" || row.transcriptionStatus === "in_arbeit")
-    .map((row) => row._id);
+  // Beobachtet werden laufende Aufträge und fehlgeschlagene Aufträge, für die
+  // noch eine automatische Wiederholung aussteht.
+  const watched: WatchedRecording[] = result.rows
+    .filter(
+      (row) =>
+        row.transcriptionStatus === "wartend" ||
+        row.transcriptionStatus === "in_arbeit" ||
+        (row.transcriptionStatus === "fehlgeschlagen" && !!row.transcriptionNextAttemptAt),
+    )
+    .map((row) => ({ id: row._id, status: row.transcriptionStatus }));
+
+  // Fällige Wiederholungen anstossen, ohne die Antwort zu verzögern.
+  after(() => sweepQueue());
 
   return (
     <div className="space-y-4">
@@ -108,7 +122,7 @@ export default async function AufnahmenPage({
 
       <RecordingsFilter values={values} uploaders={result.uploaders} activeCount={activeFilters} />
 
-      <TranscriptionWatcher ids={pendingIds} />
+      <TranscriptionWatcher entries={watched} />
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
@@ -167,6 +181,11 @@ export default async function AufnahmenPage({
                     </td>
                     <td className="td">
                       <StatusBadge status={row.transcriptionStatus} />
+                      {row.transcriptionStatus === "fehlgeschlagen" && (
+                        <span className="mt-0.5 block max-w-[220px] text-[11px] leading-snug text-ink-faint">
+                          {describeTranscriptionError(row.transcriptionError).message}
+                        </span>
+                      )}
                     </td>
                     <td className="td">
                       <DeletionBadge flagged={row.deletionFlagged} />
@@ -181,6 +200,12 @@ export default async function AufnahmenPage({
                         <Link href={`/aufnahmen/${row._id}`} className="btn btn-ghost">
                           Öffnen
                         </Link>
+                        {row.transcriptionStatus === "fehlgeschlagen" && (
+                          <RetryTranscriptionButton
+                            key={row.transcriptionFinishedAt ?? "neu"}
+                            recordingId={row._id}
+                          />
+                        )}
                         <DeletionFlagButton recordingId={row._id} flagged={row.deletionFlagged} />
                       </div>
                     </td>
