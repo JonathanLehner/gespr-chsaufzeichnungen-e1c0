@@ -120,10 +120,9 @@ export default async function AufnahmeDetailPage({
 
       {recording.deletionFlagged && (
         <div className="notice notice-warn" role="status">
-          Diese Aufnahme ist seit {formatDateTimeWithSeconds(recording.deletionFlaggedAt)} durch{" "}
-          {recording.deletionFlaggedBy} zur Löschung markiert
-          {recording.deletionReason ? ` (Grund: ${recording.deletionReason})` : ""}. Sämtliche Daten
-          bleiben erhalten, bis die Administration die Löschung bestätigt.
+          Diese Aufnahme wurde am {formatDateTimeWithSeconds(recording.deletionFlaggedAt)} durch{" "}
+          {recording.deletionFlaggedBy} zum Löschen vorgemerkt
+          {recording.deletionReason ? ` (Grund: ${recording.deletionReason})` : ""}.
         </div>
       )}
 

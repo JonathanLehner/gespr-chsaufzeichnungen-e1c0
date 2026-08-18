@@ -23,7 +23,7 @@ export function statusLabel(status: TranscriptionStatus): string {
 
 export function DeletionBadge({ flagged }: { flagged: boolean }) {
   if (!flagged) return <span className="text-[12px] text-ink-faint">–</span>;
-  return <span className="badge bg-bad-soft text-bad">Zur Löschung markiert</span>;
+  return <span className="badge bg-bad-soft text-bad">Zum Löschen vorgemerkt</span>;
 }
 
 export function RatingValue({ average, count }: { average: number | null; count: number }) {

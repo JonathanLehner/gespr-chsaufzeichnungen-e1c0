@@ -119,8 +119,8 @@ export function RecordingsFilter({
           </label>
           <select id="loeschstatus" name="loeschstatus" defaultValue={values.loeschstatus} className="field">
             <option value="alle">Alle</option>
-            <option value="ohne_markiert">Ohne Markierung</option>
-            <option value="nur_markiert">Nur markierte</option>
+            <option value="ohne_markiert">Ohne Löschvormerkung</option>
+            <option value="nur_markiert">Nur vorgemerkte</option>
           </select>
         </div>
         <div>

@@ -621,15 +621,15 @@ try:
     go("/aufnahmen?loeschstatus=ohne_markiert")
     target = js(
         "(function(){var r=Array.from(document.querySelectorAll('tbody tr')).find("
-        "function(n){return (n.innerText||'').indexOf('Zur L\\u00f6schung markieren')>=0});"
+        "function(n){return (n.innerText||'').indexOf('L\\u00f6schen')>=0});"
         "return r?r.querySelector('td:nth-child(2)').innerText.split('\\n')[0].trim():''})()"
     ) or ""
     before_rows = count("tbody tr")
-    started = click_in_row(target, "Zur L\u00f6schung markieren") if target else False
+    started = click_in_row(target, "L\u00f6schen") if target else False
     wait(1.0)
     setval('input[id^="grund-"]', "Pr\u00fcfung der Qualit\u00e4tssicherung %s" % RUN)
-    click_text("Markierung setzen")
-    marked = wait_text("markiert", 25)
+    click_text("L\u00f6schen best\u00e4tigen")
+    marked = wait_text("vorgemerkt", 25)
     wait(2.0)
 
     # data must still be there: the recording is still listed and still openable
@@ -643,7 +643,7 @@ try:
 
     # restore the original state
     if still_openable:
-        click_text("Markierung aufheben")
+        click_text("Löschung zurücknehmen")
         wait(2.5)
 
     ok = bool(target) and started and marked and still_listed and still_openable
@@ -1242,11 +1242,11 @@ try:
     # 1) flag every recording that carries this run's token
     for _ in range(8):
         go("/aufnahmen?q=%s" % RUN)
-        if not click_in_row(RUN, "Zur L\u00f6schung markieren"):
+        if not click_in_row(RUN, "L\u00f6schen"):
             break
         wait(1.0)
         setval('input[id^="grund-"]', "Testaufnahme der automatischen Abnahme %s" % RUN)
-        click_text("Markierung setzen")
+        click_text("L\u00f6schen best\u00e4tigen")
         wait(3.0)
 
     # 2) delete them for good from the admin section (scoped: the job table

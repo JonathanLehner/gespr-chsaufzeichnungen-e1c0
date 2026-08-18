@@ -41,7 +41,6 @@ export function AppShell({ user, children }: { user: SessionUser; children: Reac
       <footer className="border-t border-line bg-surface">
         <div className="mx-auto max-w-[1500px] px-5 py-4 text-[11px] text-ink-faint">
           Immotrust AG · Alle Aufnahmen sind für sämtliche angemeldeten Mitarbeitenden sichtbar.
-          Endgültige Löschungen erfolgen ausschliesslich durch die Administration.
         </div>
       </footer>
     </div>

@@ -39,7 +39,7 @@ export function DeletionFlagButton({
           disabled={pending}
           onClick={() => submit(false, "")}
         >
-          {pending ? "Wird gespeichert …" : "Markierung aufheben"}
+          {pending ? "Wird gespeichert …" : "Löschung zurücknehmen"}
         </button>
         {variant === "voll" && message && <p className="text-[12px] text-ink-faint">{message}</p>}
       </div>
@@ -55,14 +55,10 @@ export function DeletionFlagButton({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
       >
-        Zur Löschung markieren
+        Löschen
       </button>
       {open && (
         <div className="card space-y-2 border-line-strong p-3">
-          <p className="text-[12px] leading-snug text-ink-soft">
-            Die Aufnahme wird lediglich markiert. Audio, Transkript, Kommentare und Bewertungen
-            bleiben erhalten, bis die Administration die Löschung bestätigt.
-          </p>
           <label className="label" htmlFor={`grund-${recordingId}`}>
             Begründung (optional)
           </label>
@@ -81,7 +77,7 @@ export function DeletionFlagButton({
               disabled={pending}
               onClick={() => submit(true, reason)}
             >
-              {pending ? "Wird gespeichert …" : "Markierung setzen"}
+              {pending ? "Wird gespeichert …" : "Löschen bestätigen"}
             </button>
             <button
               type="button"

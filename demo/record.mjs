@@ -338,17 +338,17 @@ await scene("kommentare", "Kommentarbereich mit Text, Autor und Zeitpunkt", asyn
 await scene("loeschmarkierung", "Nutzer markiert eine Aufnahme zur Löschung – ohne Datenverlust", async () => {
   await scrollTop();
   await beat(800);
-  const unmark = page.getByRole("button", { name: "Markierung aufheben" });
+  const unmark = page.getByRole("button", { name: "Löschung zurücknehmen" });
   if (await unmark.count()) {
     await unmark.first().click();
     await page.waitForLoadState("networkidle");
     await beat(1500);
   }
-  await page.getByRole("button", { name: "Zur Löschung markieren" }).first().click();
+  await page.getByRole("button", { name: "Löschen", exact: true }).first().click();
   await beat(1500);
   await typeInto(page.getByLabel("Begründung (optional)"), "Doppelte Aufzeichnung des Beratungsgesprächs", 30);
   await beat(1200);
-  await page.getByRole("button", { name: "Markierung setzen" }).click();
+  await page.getByRole("button", { name: "Löschen bestätigen" }).click();
   await page.waitForLoadState("networkidle");
   await beat(3000);
 });
