@@ -165,18 +165,43 @@ await page.waitForSelector('.notice[role="alert"]');
 const wrongPassword = await page.locator('.notice[role="alert"]').innerText();
 record("Falsches Passwort gemeldet", wrongPassword.includes("nicht korrekt"), wrongPassword.slice(0, 80));
 
-/* 4 – Passwort zurücksetzen */
-await visit(`/passwort-vergessen`);
-await page.fill("#email", testEmail);
-await page.click('button[type="submit"]');
-await page.waitForSelector("text=Link jetzt öffnen");
-await page.click("text=Link jetzt öffnen");
-await page.waitForURL(/passwort-neu/);
-await page.fill("#password", "NeuesPasswort2026");
-await page.fill("#passwordRepeat", "NeuesPasswort2026");
-await page.click('button[type="submit"]');
-await page.waitForSelector("text=Zur Anmeldung");
-record("Passwort zurückgesetzt", true);
+/* 4 – Passwort zurücksetzen: der Link darf im Browser nie erscheinen */
+
+/** Fordert einen Reset an und liefert Meldung sowie alle sichtbaren Token-Links. */
+async function requestReset(email) {
+  await visit(`/passwort-vergessen`);
+  await page.fill("#email", email);
+  await page.click('button[type="submit"]');
+  await page.waitForSelector('.notice[role="alert"]');
+  await page.waitForTimeout(500);
+  const notice = (await page.locator('.notice[role="alert"]').innerText())
+    .replace(/\s+/g, " ")
+    .trim();
+  const links = await page.$$eval("a[href*='token=']", (nodes) =>
+    nodes.map((node) => node.getAttribute("href")),
+  );
+  const inBody = /passwort-neu\?token=|token=[A-Za-z0-9_-]{16,}/.test(await page.content());
+  return { notice, links, inBody };
+}
+
+const knownReset = await requestReset(testEmail);
+record(
+  "Reset-Link wird nie angezeigt (bestehendes Konto)",
+  knownReset.links.length === 0 && !knownReset.inBody,
+  knownReset.notice.slice(0, 90),
+);
+const unknownReset = await requestReset(`unbekannt.${Date.now()}@immotrustag.ch`);
+record(
+  "Reset-Link wird nie angezeigt (unbekannte Adresse)",
+  unknownReset.links.length === 0 && !unknownReset.inBody,
+  unknownReset.notice.slice(0, 90),
+);
+record(
+  "Antwort verrät nicht, ob ein Konto besteht",
+  knownReset.notice === unknownReset.notice,
+  knownReset.notice === unknownReset.notice ? "identische Meldung" : unknownReset.notice.slice(0, 90),
+);
+
 await visit(`/passwort-neu?token=abgelaufen`);
 await page.fill("#password", "NeuesPasswort2026");
 await page.fill("#passwordRepeat", "NeuesPasswort2026");
@@ -188,10 +213,10 @@ record("Abgelaufener Reset-Link erklärt", badReset.includes("ungültig") || bad
 /* 5 – Anmeldung als Mitarbeitende */
 await visit(`/anmelden`);
 await page.fill("#email", testEmail);
-await page.fill("#password", "NeuesPasswort2026");
+await page.fill("#password", "Immotrust2026!");
 await page.click('button[type="submit"]');
 await page.waitForURL(/aufnahmen/);
-record("Anmeldung mit neuem Passwort", true);
+record("Anmeldung nach Reset-Anfrage weiterhin möglich", true);
 
 /* 6 – Kein Admin-Zugriff für normale Konten */
 await visit(`/admin`);

@@ -81,10 +81,11 @@ npm run start -- -p 3010
 node scripts/browser-check.mjs   # vollständiger Funktionsdurchlauf im echten Browser
 node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
+node scripts/check-reset-link.mjs http://localhost:3010  # kein Reset-Link in der Oberfläche
 npx tsx --env-file=.env.local --conditions=react-server scripts/cleanup-testdata.mts
 ```
 
-`browser-check.mjs` durchläuft Registrierung, Bestätigung, Anmeldung, Passwort-Reset, Übersicht mit
+`browser-check.mjs` durchläuft Registrierung, Bestätigung, Anmeldung, Passwort-vergessen, Übersicht mit
 Suche, Filtern, Sortierung und Seitennavigation, die Detailansicht mit Player und Transkript,
 Sammelupload inklusive Drag-and-drop und Korrektur-Modal sowie das gesamte Admin-Dashboard bis zur
 endgültigen Löschung. `cleanup-testdata.mts` entfernt anschliessend die dabei entstandenen
@@ -128,8 +129,12 @@ lokal in `.dev.vars`.
 - **Aufträge**: Jede Aufnahme hat genau einen Transkriptionsauftrag. Er wird vor der Ausführung
   gesperrt, sodass parallele Aufrufe, wiederholte Klicks oder ein erneuter Upload keine doppelten
   Läufe erzeugen. Hängengebliebene Aufträge werden nach zehn Minuten wieder aufgenommen.
-- **E-Mail**: In dieser Umgebung ist kein Versand konfiguriert. Bestätigungs- und Reset-Links werden
-  direkt in der Oberfläche angezeigt und im Admin-Dashboard protokolliert.
+- **E-Mail**: In dieser Umgebung ist kein Versand konfiguriert. Bestätigungslinks werden deshalb
+  direkt in der Oberfläche angezeigt und im Admin-Dashboard protokolliert. Links zum Zurücksetzen
+  des Passworts dagegen nie – weder auf der Passwort-vergessen-Seite noch im Admin-Dashboard.
+  Sie gehen ausschliesslich in den Postausgang, weil sonst jede Person eine fremde Adresse
+  eintippen und das Konto übernehmen könnte. Die Passwort-vergessen-Seite antwortet für bestehende
+  und unbekannte Adressen identisch; `scripts/check-reset-link.mjs` prüft beides.
 - **Produktionsbuild mit webpack**: `npm run build` läuft mit `next build --webpack`. Der
   Turbopack-Build legt den Servercode in nachgeladenen Chunks ab; `@opennextjs/cloudflare` bindet
   diese Chunks nur ein, wenn die Pfade der Bauumgebung Schrägstriche verwenden. Unter Windows

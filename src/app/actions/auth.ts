@@ -33,10 +33,17 @@ type TokenDoc = {
   usedAt: string | null;
 };
 
+/**
+ * Legt Token und Postausgangseintrag an. Zurück kommt der Link ausschliesslich
+ * für Bestätigungen; ein Link zum Zurücksetzen des Passworts verlässt diese
+ * Funktion nie – auch dann nicht, wenn kein E-Mail-Versand eingerichtet ist.
+ * Sonst könnte jede Person eine fremde Adresse eintippen und das Konto
+ * übernehmen.
+ */
 async function issueToken(
   email: string,
   kind: TokenDoc["kind"],
-): Promise<{ link: string; expiresAt: string }> {
+): Promise<{ verifyLink?: string; expiresAt: string }> {
   const { token, hash } = createToken();
   const ttl = kind === "bestaetigung" ? VERIFY_TTL_MS : RESET_TTL_MS;
   const expiresAt = new Date(Date.now() + ttl).toISOString();
@@ -62,7 +69,7 @@ async function issueToken(
     createdAt: new Date().toISOString(),
     expiresAt,
   });
-  return { link, expiresAt };
+  return kind === "bestaetigung" ? { verifyLink: link, expiresAt } : { expiresAt };
 }
 
 async function consumeToken(
@@ -126,11 +133,11 @@ export async function registerAction(_prev: AuthState, formData: FormData): Prom
   if (!result.ok) {
     const existing = await findById<User>(Collections.users, email);
     if (existing && !existing.emailVerified) {
-      const { link } = await issueToken(email, "bestaetigung");
+      const { verifyLink } = await issueToken(email, "bestaetigung");
       return {
         status: "erfolg",
         email,
-        verifyLink: link,
+        verifyLink,
         message:
           "Für diese Adresse besteht bereits ein unbestätigtes Konto. Wir haben einen neuen Bestätigungslink erzeugt.",
       };
@@ -138,11 +145,11 @@ export async function registerAction(_prev: AuthState, formData: FormData): Prom
     return { status: "fehler", message: result.error, email, name };
   }
 
-  const { link } = await issueToken(email, "bestaetigung");
+  const { verifyLink } = await issueToken(email, "bestaetigung");
   return {
     status: "erfolg",
     email,
-    verifyLink: link,
+    verifyLink,
     message: "Konto angelegt. Bitte bestätigen Sie jetzt Ihre E-Mail-Adresse.",
   };
 }
@@ -169,11 +176,11 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
     };
   }
   if (!user.emailVerified) {
-    const { link } = await issueToken(email, "bestaetigung");
+    const { verifyLink } = await issueToken(email, "bestaetigung");
     return {
       status: "fehler",
       email,
-      verifyLink: link,
+      verifyLink,
       message:
         "Ihre E-Mail-Adresse ist noch nicht bestätigt. Wir haben einen neuen Bestätigungslink erzeugt.",
     };

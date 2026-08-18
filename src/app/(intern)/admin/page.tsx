@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { getCurrentUser, SUPERUSER_EMAIL } from "@/lib/auth";
 import { Collections, countDocuments, findMany } from "@/lib/db";
+import { displayableLink } from "@/lib/mail-outbox";
 import { getTemplateSettings } from "@/lib/settings";
 import { countByStatus, listJobs, listRecordings } from "@/lib/recordings";
 import { formatDateTime, formatDateTimeWithSeconds } from "@/lib/time";
@@ -64,9 +65,13 @@ export default async function AdminPage() {
     .sort((a, b) => (b.finishedAt ?? "").localeCompare(a.finishedAt ?? ""))
     .slice(0, 10);
 
+  // Der Reset-Link wird schon beim Laden entfernt und erreicht den Browser
+  // dadurch gar nicht erst – die Anzeige weiter unten kann ihn nicht versehentlich
+  // wieder hervorholen.
   const recentMails = [...outbox]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 8);
+    .slice(0, 8)
+    .map((mail) => ({ ...mail, link: displayableLink(mail) }));
 
   const metrics = [
     { label: "Aufnahmen gesamt", value: totalRecordings },
@@ -284,7 +289,7 @@ export default async function AdminPage() {
                     erzeugt {formatDateTimeWithSeconds(mail.createdAt)} · gültig bis{" "}
                     {formatDateTimeWithSeconds(mail.expiresAt)}
                   </p>
-                  {mail.kind === "bestaetigung" ? (
+                  {mail.link ? (
                     <Link
                       href={mail.link}
                       className="mt-0.5 block truncate font-mono text-[11px] text-petrol hover:underline"
