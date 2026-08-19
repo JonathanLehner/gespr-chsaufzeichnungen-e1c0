@@ -69,7 +69,12 @@ export default async function AufnahmeDetailPage({
     ["Anrufnummer", recording.callNumber || "–"],
     ["Gesprächszeitpunkt (CET)", formatDateTimeWithSeconds(recording.callAtUtc)],
     ["Dauer", formatDuration(recording.durationMs)],
-    ["Originaldateiname", <span key="f" className="font-mono text-[12px]">{recording.originalFilename}</span>],
+    [
+      "Originaldateiname",
+      <span key="f" className="font-mono text-[12px]">
+        {recording.originalFilename}
+      </span>,
+    ],
     ["Dateiformat", recording.mimeType === "audio/wav" ? "WAV" : "MP3"],
     ["Dateigrösse", `${(recording.byteSize / (1024 * 1024)).toFixed(1)} MB`],
     [
@@ -123,14 +128,16 @@ export default async function AufnahmeDetailPage({
       </div>
 
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight text-ink">
             {recording.callerName}
             <span className="ml-2 text-[15px] font-normal text-ink-soft">
               {formatDateTime(recording.callAtUtc)} Uhr
             </span>
           </h1>
-          <p className="mt-1 font-mono text-[12px] text-ink-faint">{recording.originalFilename}</p>
+          <p className="mt-1 font-mono text-[12px] text-ink-faint wrap-anywhere">
+            {recording.originalFilename}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={recording.transcriptionStatus} />
@@ -172,11 +179,16 @@ export default async function AufnahmeDetailPage({
         <div id="metadaten" tabIndex={-1} className="space-y-4 scroll-mt-20">
           <section className="card p-4">
             <h2 className="text-[14px] font-semibold text-ink">Metadaten</h2>
+            {/* Dateiname und Adresse sind zusammenhängende Zeichenketten ohne
+                Leerzeichen. Ohne „wrap-anywhere“ bestimmen sie die kleinste
+                mögliche Breite der Karte: Der Wert läuft rechts aus der Karte
+                heraus und drückt auf schmalen Geräten die ganze Seite breiter
+                als das Fenster. */}
             <dl className="mt-3 space-y-1.5">
               {metadata.map(([term, value]) => (
                 <div key={term} className="flex gap-3 border-b border-line/70 pb-1.5 last:border-0">
                   <dt className="w-[46%] shrink-0 text-[12px] text-ink-faint">{term}</dt>
-                  <dd className="text-[12.5px] text-ink">{value}</dd>
+                  <dd className="min-w-0 flex-1 text-[12.5px] text-ink wrap-anywhere">{value}</dd>
                 </div>
               ))}
             </dl>

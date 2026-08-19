@@ -261,7 +261,7 @@ export default async function AdminPage() {
             <ul className="mt-4 space-y-2">
               {commentOverview.rows.map((comment) => (
                 <li key={comment._id} className="rounded-[4px] border border-line bg-canvas/60 p-3">
-                  <div className="flex flex-wrap items-baseline gap-2">
+                  <div className="flex flex-wrap items-baseline gap-2 wrap-anywhere">
                     <span className="text-[13px] font-semibold text-ink">{comment.authorName}</span>
                     <span className="font-mono text-[11px] text-ink-faint">
                       {comment.authorEmail}
@@ -275,7 +275,7 @@ export default async function AdminPage() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 text-[11.5px] text-ink-faint">
+                  <p className="mt-1 text-[11.5px] text-ink-faint wrap-anywhere">
                     zu{" "}
                     <Link
                       href={`/aufnahmen/${comment.recordingId}`}
@@ -285,7 +285,7 @@ export default async function AdminPage() {
                     </Link>{" "}
                     <span className="font-mono">{comment.originalFilename}</span>
                   </p>
-                  <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+                  <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink wrap-anywhere">
                     {comment.text}
                   </p>
                   <div className="mt-2">
@@ -375,7 +375,7 @@ export default async function AdminPage() {
           <ul className="mt-3 grid gap-2 lg:grid-cols-2">
             {recentMails.map((mail) => (
               <li key={mail._id} className="rounded-[4px] border border-line bg-canvas/60 p-2">
-                <p className="text-[12.5px] text-ink">
+                <p className="text-[12.5px] text-ink wrap-anywhere">
                   <strong>{mail.to}</strong> ·{" "}
                   {mail.kind === "bestaetigung" ? "E-Mail-Bestätigung" : "Passwort zurücksetzen"}{" "}
                   <DeliveryBadge status={mail.deliveryStatus} />

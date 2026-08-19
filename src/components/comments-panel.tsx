@@ -163,6 +163,9 @@ function CommentItem({ comment, own }: { comment: Comment; own: boolean }) {
         )}
       </header>
 
+      {/* Der Kommentartext bricht auch innerhalb eines Wortes um: Ein
+          eingefügter Link oder Dateiname ohne Leerzeichen würde die Karte sonst
+          über ihre Spalte hinaus dehnen. */}
       {mode === "bearbeiten" ? (
         <div className="mt-2">
           <label className="label" htmlFor={fieldId}>
@@ -194,7 +197,7 @@ function CommentItem({ comment, own }: { comment: Comment; own: boolean }) {
           </div>
         </div>
       ) : (
-        <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+        <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink wrap-anywhere">
           {comment.text}
         </p>
       )}

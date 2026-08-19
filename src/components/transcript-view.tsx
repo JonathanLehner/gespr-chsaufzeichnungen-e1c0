@@ -228,7 +228,12 @@ export function TranscriptView({
         <span className="text-[12px] text-ink-faint">
           {sentences.length} Sätze · {speakerTone.size} Sprecher
         </span>
-        <div className="ml-auto flex items-center gap-2">
+        {/* Suchfeld, Trefferzähler, Sprungtasten und „Mitlaufen“ stehen auf
+            breiten Bildschirmen in einer Zeile. Auf schmalen Geräten reicht die
+            Breite dafür nicht: Ohne Umbruch und ohne schrumpffähiges Suchfeld
+            würde diese Zeile die Karte – und damit die ganze Detailseite –
+            breiter machen als das Fenster. */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <input
             type="search"
             value={query}
@@ -242,7 +247,7 @@ export function TranscriptView({
                 goToMatch(matchPosition + (event.shiftKey ? -1 : 1));
               }
             }}
-            className="field w-56"
+            className="field w-56 min-w-0"
             placeholder="Im Transkript suchen …"
             aria-label="Im Transkript suchen"
           />

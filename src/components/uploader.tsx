@@ -531,7 +531,7 @@ function MetadataDialog({
         <h2 id="metadaten-titel" className="text-[16px] font-semibold text-ink">
           Metadaten manuell erfassen
         </h2>
-        <p className="mt-1 font-mono text-[12px] text-ink-faint">{item.file.name}</p>
+        <p className="mt-1 font-mono text-[12px] text-ink-faint wrap-anywhere">{item.file.name}</p>
         {item.problem && !item.metadata && (
           <div className="notice notice-warn mt-3">{item.problem}</div>
         )}

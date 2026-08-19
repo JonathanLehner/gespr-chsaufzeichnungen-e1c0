@@ -252,7 +252,7 @@ export function HardDeleteButton({
               {commentCount === 1 ? "Kommentar" : "Kommentare"} und {ratingCount}{" "}
               {ratingCount === 1 ? "Bewertung" : "Bewertungen"} der Aufnahme von {callerName}.
             </p>
-            <p className="mt-2 font-mono text-[12px] text-ink-faint">{filename}</p>
+            <p className="mt-2 font-mono text-[12px] text-ink-faint wrap-anywhere">{filename}</p>
             <p className="mt-3 text-[13px] text-ink">
               Dieser Schritt kann nicht rückgängig gemacht werden. Geben Sie zur Bestätigung{" "}
               <strong>LÖSCHEN</strong> ein.
