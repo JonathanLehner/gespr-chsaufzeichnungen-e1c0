@@ -3,10 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
+  createPasswordResetLinkAction,
   hardDeleteRecordingAction,
   retryTranscriptionAction,
   runQueueAction,
+  type ResetLinkResult,
 } from "@/app/actions/admin";
+import { formatDateTimeWithSeconds } from "@/lib/time";
 
 export function RetryButton({ recordingId }: { recordingId: string }) {
   const router = useRouter();
@@ -56,6 +59,81 @@ export function RunQueueButton() {
         {pending ? "Warteschlange läuft …" : "Warteschlange jetzt abarbeiten"}
       </button>
       {message && <span className="text-[12px] text-ink-soft">{message}</span>}
+    </div>
+  );
+}
+
+/**
+ * Erzeugt für ein Konto einen Link zum Zurücksetzen des Passworts. Der Link
+ * lebt ausschliesslich in diesem Zustand: Er wird nicht erneut vom Server
+ * geladen und verschwindet mit dem nächsten Seitenaufbau.
+ */
+export function ResetLinkButton({ email }: { email: string }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [result, setResult] = useState<ResetLinkResult | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  function create() {
+    if (pending) return;
+    setResult(null);
+    setCopied(false);
+    startTransition(async () => {
+      setResult(await createPasswordResetLinkAction(email));
+      router.refresh();
+    });
+  }
+
+  async function copy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div>
+      <button type="button" className="btn btn-secondary" disabled={pending} onClick={create}>
+        {pending ? "Wird erzeugt …" : "Reset-Link erzeugen"}
+      </button>
+
+      {result && !result.ok && <p className="mt-1 text-[11px] text-bad">{result.message}</p>}
+
+      {result?.ok && (
+        <div className="mt-2 rounded-[4px] border border-warn/40 bg-warn-soft p-2">
+          <p className="text-[11.5px] font-semibold text-ink">
+            Einmalige Anzeige – nur für Sie sichtbar.
+          </p>
+          <p className="mt-0.5 text-[11px] text-ink-soft">
+            Gültig bis {formatDateTimeWithSeconds(result.expiresAt)}, einmal verwendbar.{" "}
+            {result.delivery} Geben Sie ihn ausschliesslich an {result.email} weiter.
+          </p>
+          <input
+            readOnly
+            value={result.url}
+            aria-label={`Reset-Link für ${result.email}`}
+            className="field mt-1.5 font-mono text-[11px]"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <button type="button" className="btn btn-secondary" onClick={() => copy(result.url)}>
+              {copied ? "Kopiert" : "Link kopieren"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setResult(null);
+                setCopied(false);
+              }}
+            >
+              Ausblenden
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

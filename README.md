@@ -6,8 +6,9 @@ Verkaufsgespräche der Immotrust AG.
 ## Funktionsumfang
 
 - **Konten**: Registrierung und Anmeldung mit E-Mail und Passwort, E-Mail-Bestätigung, Passwort
-  zurücksetzen. Zugelassen sind ausschliesslich Adressen `@immotrustag.ch` sowie
-  `jonathanslehner@gmail.com` (Superuser, feste Admin-Rolle).
+  zurücksetzen. Bestätigungs- und Reset-Mails gehen über einen einstellbaren Versanddienst hinaus.
+  Zugelassen sind ausschliesslich Adressen `@immotrustag.ch` sowie `jonathanslehner@gmail.com`
+  (Superuser, feste Admin-Rolle).
 - **Sammelupload**: Mehrfachauswahl und Drag-and-drop für WAV und MP3, Metadaten aus dem Dateinamen,
   Korrektur-Modal für nicht lesbare Namen, Fortschritt und Ergebnis je Datei.
 - **Transkription**: Nach dem Upload erzeugt Gemini automatisch ein deutsches Transkript mit
@@ -20,7 +21,8 @@ Verkaufsgespräche der Immotrust AG.
 - **Löschungen**: Mitarbeitende setzen nur eine Löschmarkierung. Endgültig gelöscht wird
   ausschliesslich im Admin-Dashboard, inklusive Audio, Transkript, Kommentaren und Bewertungen.
 - **Admin-Dashboard**: Editor für die Dateinamensvorlage mit Testfeld und Parse-Vorschau,
-  Auftragsübersicht, manueller Neustart fehlgeschlagener Transkriptionen, Liste der Löschmarkierungen.
+  Auftragsübersicht, manueller Neustart fehlgeschlagener Transkriptionen, Liste der Löschmarkierungen,
+  Einstellungen des E-Mail-Versands mit Testnachricht sowie je Konto die Aktion „Reset-Link erzeugen“.
 
 ## Entwicklung
 
@@ -36,6 +38,20 @@ Erforderliche Variablen in `.env.local` (nicht im Repository enthalten):
 ```
 CLAWCORP_API_KEY=...   # ClawCorp-Plattform: Datenbank, Gemini, Objektspeicher
 AUTH_SECRET=...        # Signaturschlüssel für Wiedergabe-Tokens
+```
+
+Optional für den E-Mail-Versand. Dieselben Werte lassen sich im Admin-Dashboard hinterlegen; was dort
+eingetragen ist, hat Vorrang. Ist beides leer, werden E-Mails nur protokolliert:
+
+```
+MAIL_PROVIDER=resend            # resend | postmark | sendgrid | mailgun | protokoll
+MAIL_API_KEY=...                # Schlüssel des Dienstes
+MAIL_FROM_ADDRESS=noreply@immotrustag.ch
+MAIL_FROM_NAME=Gesprächsaufzeichnungen Immotrust AG
+MAIL_REPLY_TO=...               # optional
+MAIL_MAILGUN_DOMAIN=...         # nur für Mailgun
+MAIL_MAILGUN_REGION=eu          # nur für Mailgun, eu oder us
+APP_BASE_URL=https://…          # Basis der Links in den E-Mails; sonst der Host der Anfrage
 ```
 
 ## Konten
@@ -54,7 +70,7 @@ werden keine Beispieldaten erzeugt.
 | `src/app/actions` | Server Actions für Anmeldung, Aufnahmen und Administration |
 | `src/app/api/upload` | Entgegennahme der Audiodateien inklusive Signaturprüfung |
 | `src/app/api/audio/[id]` | Ausliefern der Aufnahme mit Bereichsanfragen und signiertem Token |
-| `src/lib` | Datenzugriff, Authentifizierung, Dateinamensanalyse, Transkription |
+| `src/lib` | Datenzugriff, Authentifizierung, E-Mail-Versand, Dateinamensanalyse, Transkription |
 | `scripts` | Bildgenerierung, WebP-Varianten, Funktions- und Leistungstest |
 
 ## Prüfung
@@ -66,7 +82,9 @@ npm run start -- -p 3010
 ADMIN_PASSWORD=… node scripts/browser-check.mjs   # vollständiger Funktionsdurchlauf im echten Browser
 node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
-node scripts/check-reset-link.mjs http://localhost:3010  # kein Reset-Link in der Oberfläche
+
+# Reset-Weg: kein Link in der Oberfläche, aber Reset-Link erzeugen im Dashboard funktioniert
+ADMIN_PASSWORD=… node scripts/check-reset-link.mjs http://localhost:3010
 npx tsx --env-file=.env.local --conditions=react-server scripts/cleanup-testdata.mts
 ```
 
@@ -93,7 +111,8 @@ npx wrangler deploy                 # Ausliefern
 ```
 
 `CLAWCORP_API_KEY` und `AUTH_SECRET` liegen als Worker-Secrets (`npx wrangler secret put NAME`),
-lokal in `.dev.vars`.
+lokal in `.dev.vars`. Für den E-Mail-Versand kommt `MAIL_API_KEY` auf demselben Weg dazu, sofern der
+Schlüssel nicht im Admin-Dashboard hinterlegt wird.
 
 ## Technische Entscheidungen
 
@@ -117,12 +136,18 @@ lokal in `.dev.vars`.
 - **Aufträge**: Jede Aufnahme hat genau einen Transkriptionsauftrag. Er wird vor der Ausführung
   gesperrt, sodass parallele Aufrufe, wiederholte Klicks oder ein erneuter Upload keine doppelten
   Läufe erzeugen. Hängengebliebene Aufträge werden nach zehn Minuten wieder aufgenommen.
-- **E-Mail**: In dieser Umgebung ist kein Versand konfiguriert. Bestätigungslinks werden deshalb
-  direkt in der Oberfläche angezeigt und im Admin-Dashboard protokolliert. Links zum Zurücksetzen
-  des Passworts dagegen nie – weder auf der Passwort-vergessen-Seite noch im Admin-Dashboard.
-  Sie gehen ausschliesslich in den Postausgang, weil sonst jede Person eine fremde Adresse
-  eintippen und das Konto übernehmen könnte. Die Passwort-vergessen-Seite antwortet für bestehende
-  und unbekannte Adressen identisch; `scripts/check-reset-link.mjs` prüft beides.
+- **E-Mail**: Bestätigungs- und Reset-Mails gehen über einen HTTP-Versanddienst hinaus (Resend,
+  Postmark, SendGrid oder Mailgun); SMTP steht auf Cloudflare Workers nicht zur Verfügung.
+  Versanddienst, Schlüssel und Absender stehen entweder in den Umgebungsvariablen oder im
+  Admin-Dashboard, wobei das Dashboard Vorrang hat. Ist nichts hinterlegt, wird die Nachricht nur
+  protokolliert und im Postausgang als nicht zugestellt vermerkt; der Bestätigungslink erscheint
+  dann ersatzweise direkt im Formular.
+- **Reset-Links**: Der Link zum Zurücksetzen des Passworts wird nie öffentlich angezeigt – weder auf
+  der Passwort-vergessen-Seite noch im Postausgang –, weil sonst jede Person eine fremde Adresse
+  eintippen und das Konto übernehmen könnte. Die Passwort-vergessen-Seite antwortet deshalb für
+  bestehende und unbekannte Adressen identisch. Bleibt eine Zustellung aus, erzeugt der Superuser im
+  Admin-Dashboard über „Reset-Link erzeugen“ einen frischen Link, der ihm genau einmal angezeigt
+  wird. `scripts/check-reset-link.mjs` prüft beide Seiten dieser Regel.
 - **Produktionsbuild mit webpack**: `npm run build` läuft mit `next build --webpack`. Der
   Turbopack-Build legt den Servercode in nachgeladenen Chunks ab; `@opennextjs/cloudflare` bindet
   diese Chunks nur ein, wenn die Pfade der Bauumgebung Schrägstriche verwenden. Unter Windows

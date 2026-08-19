@@ -39,8 +39,8 @@ function StateNotice({ state }: { state: AuthState }) {
       <p>{state.message}</p>
       {state.verifyLink && (
         <p className="mt-2 border-t border-current/20 pt-2 text-[12px]">
-          In dieser Umgebung ist kein E-Mail-Versand eingerichtet. Der Bestätigungslink wird deshalb
-          direkt angezeigt:{" "}
+          Die E-Mail konnte nicht zugestellt werden. Der Bestätigungslink wird deshalb direkt
+          angezeigt:{" "}
           <Link href={state.verifyLink} className="font-semibold underline underline-offset-2">
             Link jetzt öffnen
           </Link>

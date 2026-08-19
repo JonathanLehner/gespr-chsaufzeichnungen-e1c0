@@ -145,6 +145,11 @@ export type FilenameTemplateSettings = {
   history: { version: number; template: string; updatedAt: string; updatedBy: string }[];
 };
 
+/** Angebundene Versanddienste; `protokoll` stellt nichts zu, sondern schreibt nur ins Serverprotokoll. */
+export type MailProvider = "resend" | "postmark" | "sendgrid" | "mailgun" | "protokoll";
+
+export type MailDeliveryStatus = "gesendet" | "fehlgeschlagen" | "nicht_konfiguriert";
+
 export type MailOutboxEntry = {
   _id: string;
   to: string;
@@ -153,4 +158,29 @@ export type MailOutboxEntry = {
   link: string;
   createdAt: string;
   expiresAt: string;
+  /** Fehlt bei Einträgen aus der Zeit vor dem angebundenen Versand. */
+  deliveryStatus?: MailDeliveryStatus;
+  deliveryProvider?: MailProvider;
+  deliveryError?: string | null;
+  /** Gesetzt, wenn der Link im Admin-Dashboard von Hand erzeugt wurde. */
+  issuedBy?: string | null;
+};
+
+/**
+ * Einstellungen des E-Mail-Versands. Leere Felder bedeuten „aus der Umgebung
+ * übernehmen“ (siehe `src/lib/mailer.ts`), damit dieselbe Anwendung entweder
+ * über Worker-Secrets oder über das Admin-Dashboard eingerichtet werden kann.
+ */
+export type MailSettings = {
+  _id: "mail_settings";
+  provider: MailProvider | "";
+  fromAddress: string;
+  fromName: string;
+  replyTo: string;
+  /** Schlüssel des Versanddienstes. Verlässt den Server nie. */
+  apiKey: string;
+  mailgunDomain: string;
+  mailgunRegion: "eu" | "us" | "";
+  updatedAt: string | null;
+  updatedBy: string | null;
 };

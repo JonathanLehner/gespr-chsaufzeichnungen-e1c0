@@ -3,13 +3,21 @@ import type { Metadata } from "next";
 import { getCurrentUser, SUPERUSER_EMAIL } from "@/lib/auth";
 import { Collections, countDocuments, findMany } from "@/lib/db";
 import { displayableLink } from "@/lib/mail-outbox";
+import { DELIVERY_LABELS, PROVIDER_LABELS } from "@/lib/mail-config";
+import { mailOverview } from "@/lib/mailer";
 import { getTemplateSettings } from "@/lib/settings";
 import { countByStatus, listJobs, listRecordings } from "@/lib/recordings";
 import { formatDateTime, formatDateTimeWithSeconds } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { TemplateEditor } from "@/components/template-editor";
-import { HardDeleteButton, RetryButton, RunQueueButton } from "@/components/admin-controls";
-import type { MailOutboxEntry, User } from "@/lib/types";
+import { MailSettingsEditor } from "@/components/mail-settings-editor";
+import {
+  HardDeleteButton,
+  ResetLinkButton,
+  RetryButton,
+  RunQueueButton,
+} from "@/components/admin-controls";
+import type { MailDeliveryStatus, MailOutboxEntry, User } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Admin-Dashboard" };
 
@@ -34,15 +42,17 @@ export default async function AdminPage() {
     );
   }
 
-  const [settings, jobs, statusCounts, flagged, users, outbox, totalRecordings] = await Promise.all([
-    getTemplateSettings(),
-    listJobs(),
-    countByStatus(),
-    listRecordings({ loeschstatus: "nur_markiert", pageSize: 100, sort: "hochgeladen_neu" }),
-    findMany<User>(Collections.users, {}),
-    findMany<MailOutboxEntry>(Collections.mailOutbox, {}),
-    countDocuments(Collections.recordings, {}),
-  ]);
+  const [settings, jobs, statusCounts, flagged, users, outbox, totalRecordings, mailSetup] =
+    await Promise.all([
+      getTemplateSettings(),
+      listJobs(),
+      countByStatus(),
+      listRecordings({ loeschstatus: "nur_markiert", pageSize: 100, sort: "hochgeladen_neu" }),
+      findMany<User>(Collections.users, {}),
+      findMany<MailOutboxEntry>(Collections.mailOutbox, {}),
+      countDocuments(Collections.recordings, {}),
+      mailOverview(),
+    ]);
 
   const [commentCount, ratingCount] = await Promise.all([
     countDocuments(Collections.comments, {}),
@@ -231,16 +241,23 @@ export default async function AdminPage() {
         )}
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-2">
-        <div className="card p-5">
-          <h2 className="text-[15px] font-semibold text-ink">Konten ({users.length})</h2>
-          <table className="mt-3 w-full border-collapse">
+      <section className="card p-5">
+        <h2 className="text-[15px] font-semibold text-ink">Konten ({users.length})</h2>
+        <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-ink-soft">
+          Kommt eine Reset-Mail nicht an, erzeugt „Reset-Link erzeugen“ einen neuen Link. Er wird
+          zusätzlich per E-Mail verschickt und Ihnen einmalig angezeigt, damit Sie ihn persönlich
+          weitergeben können. Geben Sie ihn ausschliesslich an die Person weiter, der das Konto
+          gehört – wer den Link hat, kann das Passwort setzen.
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[720px] border-collapse">
             <thead className="bg-canvas">
               <tr>
                 <th className="th">Name</th>
                 <th className="th">E-Mail</th>
                 <th className="th">Rolle</th>
                 <th className="th">Bestätigt</th>
+                <th className="th">Passwort</th>
               </tr>
             </thead>
             <tbody>
@@ -262,54 +279,82 @@ export default async function AdminPage() {
                       <span className="badge bg-warn-soft text-warn">offen</span>
                     )}
                   </td>
+                  <td className="td w-[22rem] align-top">
+                    <ResetLinkButton email={account.email} />
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </section>
 
-        <div className="card p-5">
-          <h2 className="text-[15px] font-semibold text-ink">Bestätigungs- und Reset-Links</h2>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-soft">
-            In dieser Umgebung ist kein E-Mail-Versand konfiguriert. Bestätigungslinks werden hier
-            protokolliert, damit die Administration Mitarbeitenden bei Bedarf weiterhelfen kann.
-            Links zum Zurücksetzen des Passworts werden nie angezeigt – auch hier nicht.
-          </p>
-          {recentMails.length === 0 ? (
-            <p className="mt-3 text-[13px] text-ink-soft">Noch keine Links erzeugt.</p>
-          ) : (
-            <ul className="mt-3 space-y-2">
-              {recentMails.map((mail) => (
-                <li key={mail._id} className="rounded-[4px] border border-line bg-canvas/60 p-2">
-                  <p className="text-[12.5px] text-ink">
-                    <strong>{mail.to}</strong> ·{" "}
-                    {mail.kind === "bestaetigung" ? "E-Mail-Bestätigung" : "Passwort zurücksetzen"}
+      <MailSettingsEditor
+        settings={mailSetup.settings}
+        config={mailSetup.config}
+        testAddress={user.email}
+      />
+
+      <section className="card p-5">
+        <h2 className="text-[15px] font-semibold text-ink">Postausgang</h2>
+        <p className="mt-1 max-w-3xl text-[12.5px] leading-relaxed text-ink-soft">
+          Protokoll der zuletzt verschickten Bestätigungs- und Reset-Mails samt Zustellstand.
+          Bestätigungslinks bleiben einsehbar, Links zum Zurücksetzen des Passworts nicht: Sie
+          entstehen ausschliesslich per E-Mail oder über „Reset-Link erzeugen“ in der Kontenliste,
+          wo sie genau einmal angezeigt werden.
+        </p>
+        {recentMails.length === 0 ? (
+          <p className="mt-3 text-[13px] text-ink-soft">Noch keine Links erzeugt.</p>
+        ) : (
+          <ul className="mt-3 grid gap-2 lg:grid-cols-2">
+            {recentMails.map((mail) => (
+              <li key={mail._id} className="rounded-[4px] border border-line bg-canvas/60 p-2">
+                <p className="text-[12.5px] text-ink">
+                  <strong>{mail.to}</strong> ·{" "}
+                  {mail.kind === "bestaetigung" ? "E-Mail-Bestätigung" : "Passwort zurücksetzen"}{" "}
+                  <DeliveryBadge status={mail.deliveryStatus} />
+                </p>
+                <p className="text-[11px] text-ink-faint">
+                  erzeugt {formatDateTimeWithSeconds(mail.createdAt)} · gültig bis{" "}
+                  {formatDateTimeWithSeconds(mail.expiresAt)}
+                  {mail.deliveryProvider && mail.deliveryProvider !== "protokoll"
+                    ? ` · ${PROVIDER_LABELS[mail.deliveryProvider]}`
+                    : ""}
+                  {mail.issuedBy ? ` · erzeugt von ${mail.issuedBy}` : ""}
+                </p>
+                {mail.deliveryError && (
+                  <p className="mt-0.5 text-[11px] text-bad">{mail.deliveryError}</p>
+                )}
+                {mail.link ? (
+                  <Link
+                    href={mail.link}
+                    className="mt-0.5 block truncate font-mono text-[11px] text-petrol hover:underline"
+                  >
+                    {mail.link}
+                  </Link>
+                ) : (
+                  <p className="mt-0.5 text-[11px] text-ink-faint">
+                    Link aus Sicherheitsgründen ausgeblendet.
                   </p>
-                  <p className="text-[11px] text-ink-faint">
-                    erzeugt {formatDateTimeWithSeconds(mail.createdAt)} · gültig bis{" "}
-                    {formatDateTimeWithSeconds(mail.expiresAt)}
-                  </p>
-                  {mail.link ? (
-                    <Link
-                      href={mail.link}
-                      className="mt-0.5 block truncate font-mono text-[11px] text-petrol hover:underline"
-                    >
-                      {mail.link}
-                    </Link>
-                  ) : (
-                    <p className="mt-0.5 text-[11px] text-ink-faint">
-                      Link aus Sicherheitsgründen ausgeblendet – er wird ausschliesslich per E-Mail
-                      zugestellt.
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );
+}
+
+function DeliveryBadge({ status }: { status: MailDeliveryStatus | undefined }) {
+  if (!status) return null;
+  const tone =
+    status === "gesendet"
+      ? "bg-ok-soft text-ok"
+      : status === "fehlgeschlagen"
+        ? "bg-bad-soft text-bad"
+        : "bg-warn-soft text-warn";
+  return <span className={`badge ${tone}`}>{DELIVERY_LABELS[status]}</span>;
 }
 
 type JobRow = {

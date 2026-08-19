@@ -1,12 +1,10 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { randomUUID } from "node:crypto";
-import { Collections, findById, insertOne, updateOne } from "@/lib/db";
+import { Collections, findById, updateOne } from "@/lib/db";
 import {
   EMAIL_NOT_ALLOWED_MESSAGE,
   createSession,
-  createToken,
   createUser,
   destroySession,
   emailAllowed,
@@ -19,11 +17,9 @@ import {
   sha256,
   verifyPassword,
 } from "@/lib/auth";
+import { issueAuthLink } from "@/lib/mail";
 import type { User } from "@/lib/types";
 import type { AuthState } from "@/lib/auth-state";
-
-const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
-const RESET_TTL_MS = 60 * 60 * 1000;
 
 type TokenDoc = {
   _id: string;
@@ -34,42 +30,18 @@ type TokenDoc = {
 };
 
 /**
- * Legt Token und Postausgangseintrag an. Zurück kommt der Link ausschliesslich
- * für Bestätigungen; ein Link zum Zurücksetzen des Passworts verlässt diese
- * Funktion nie – auch dann nicht, wenn kein E-Mail-Versand eingerichtet ist.
- * Sonst könnte jede Person eine fremde Adresse eintippen und das Konto
- * übernehmen.
+ * Verschickt einen Bestätigungslink. Konnte die E-Mail nicht zugestellt werden,
+ * kommt der Link zur Anzeige zurück – eine Bestätigung weist lediglich eine
+ * Adresse nach, die ohnehin gerade eingegeben wurde.
+ *
+ * Für Links zum Zurücksetzen des Passworts gibt es diesen Rückweg bewusst
+ * nicht: Sonst könnte jede Person eine fremde Adresse eintippen und das Konto
+ * übernehmen. Bei Zustellproblemen erzeugt der Superuser den Link im
+ * Admin-Dashboard.
  */
-async function issueToken(
-  email: string,
-  kind: TokenDoc["kind"],
-): Promise<{ verifyLink?: string; expiresAt: string }> {
-  const { token, hash } = createToken();
-  const ttl = kind === "bestaetigung" ? VERIFY_TTL_MS : RESET_TTL_MS;
-  const expiresAt = new Date(Date.now() + ttl).toISOString();
-  await insertOne(Collections.tokens, {
-    _id: hash,
-    email,
-    kind,
-    expiresAt,
-    usedAt: null,
-    createdAt: new Date().toISOString(),
-  });
-  const path = kind === "bestaetigung" ? "/bestaetigen" : "/passwort-neu";
-  const link = `${path}?token=${token}`;
-  await insertOne(Collections.mailOutbox, {
-    _id: randomUUID(),
-    to: email,
-    kind,
-    subject:
-      kind === "bestaetigung"
-        ? "Bitte bestätigen Sie Ihre E-Mail-Adresse"
-        : "Passwort zurücksetzen",
-    link,
-    createdAt: new Date().toISOString(),
-    expiresAt,
-  });
-  return kind === "bestaetigung" ? { verifyLink: link, expiresAt } : { expiresAt };
+async function sendVerifyLink(email: string): Promise<{ verifyLink?: string }> {
+  const issued = await issueAuthLink(email, "bestaetigung");
+  return issued.delivery.status === "gesendet" ? {} : { verifyLink: issued.path };
 }
 
 async function consumeToken(
@@ -133,24 +105,27 @@ export async function registerAction(_prev: AuthState, formData: FormData): Prom
   if (!result.ok) {
     const existing = await findById<User>(Collections.users, email);
     if (existing && !existing.emailVerified) {
-      const { verifyLink } = await issueToken(email, "bestaetigung");
+      const { verifyLink } = await sendVerifyLink(email);
       return {
         status: "erfolg",
         email,
         verifyLink,
-        message:
-          "Für diese Adresse besteht bereits ein unbestätigtes Konto. Wir haben einen neuen Bestätigungslink erzeugt.",
+        message: verifyLink
+          ? "Für diese Adresse besteht bereits ein unbestätigtes Konto. Wir haben einen neuen Bestätigungslink erzeugt."
+          : `Für diese Adresse besteht bereits ein unbestätigtes Konto. Wir haben einen neuen Bestätigungslink an ${email} geschickt.`,
       };
     }
     return { status: "fehler", message: result.error, email, name };
   }
 
-  const { verifyLink } = await issueToken(email, "bestaetigung");
+  const { verifyLink } = await sendVerifyLink(email);
   return {
     status: "erfolg",
     email,
     verifyLink,
-    message: "Konto angelegt. Bitte bestätigen Sie jetzt Ihre E-Mail-Adresse.",
+    message: verifyLink
+      ? "Konto angelegt. Bitte bestätigen Sie jetzt Ihre E-Mail-Adresse."
+      : `Konto angelegt. Wir haben einen Bestätigungslink an ${email} geschickt. Er ist 24 Stunden gültig.`,
   };
 }
 
@@ -176,13 +151,14 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
     };
   }
   if (!user.emailVerified) {
-    const { verifyLink } = await issueToken(email, "bestaetigung");
+    const { verifyLink } = await sendVerifyLink(email);
     return {
       status: "fehler",
       email,
       verifyLink,
-      message:
-        "Ihre E-Mail-Adresse ist noch nicht bestätigt. Wir haben einen neuen Bestätigungslink erzeugt.",
+      message: verifyLink
+        ? "Ihre E-Mail-Adresse ist noch nicht bestätigt. Wir haben einen neuen Bestätigungslink erzeugt."
+        : `Ihre E-Mail-Adresse ist noch nicht bestätigt. Wir haben einen neuen Bestätigungslink an ${email} geschickt.`,
     };
   }
 
@@ -228,18 +204,19 @@ export async function requestResetAction(_prev: AuthState, formData: FormData): 
   }
   const user = await findById<User>(Collections.users, email);
   if (user) {
-    // Der Link wandert ausschliesslich in den Postausgang. Er wird bewusst weder
-    // zurückgegeben noch angezeigt – auch nicht, wenn kein E-Mail-Versand
-    // eingerichtet ist, weil er sonst jeder Person offenstünde, die eine fremde
-    // Adresse eintippt.
-    await issueToken(email, "passwort_reset");
+    // Der Link geht ausschliesslich per E-Mail hinaus. Er wird bewusst weder
+    // zurückgegeben noch angezeigt, weil er sonst jeder Person offenstünde, die
+    // eine fremde Adresse eintippt.
+    await issueAuthLink(email, "passwort_reset");
   }
-  // Bewusst identische Antwort für bestehende und unbekannte Adressen.
+  // Bewusst identische Antwort für bestehende und unbekannte Adressen – auch
+  // dann, wenn der Versand fehlgeschlagen ist. Jede Abweichung würde verraten,
+  // zu welchen Adressen ein Konto besteht.
   return {
     status: "erfolg",
     email,
     message:
-      "Falls ein Konto zu dieser Adresse besteht, haben wir einen Link zum Zurücksetzen an diese E-Mail-Adresse geschickt. Er ist 60 Minuten gültig. Aus Sicherheitsgründen wird der Link nie hier angezeigt. Kommt keine E-Mail an, wenden Sie sich bitte an die Administration.",
+      "Falls ein Konto zu dieser Adresse besteht, haben wir einen Link zum Zurücksetzen an diese E-Mail-Adresse geschickt. Er ist 60 Minuten gültig. Aus Sicherheitsgründen wird der Link nie hier angezeigt. Kommt keine E-Mail an, prüfen Sie bitte den Spam-Ordner oder wenden Sie sich an die Administration.",
   };
 }
 
