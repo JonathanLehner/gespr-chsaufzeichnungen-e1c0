@@ -5,7 +5,7 @@
  *   PRUEF_PASSWORT=… node scripts/check-tastatur.mjs
  *
  * Geprüft wird, dass je Satz nur eine Tabulator-Station bleibt, Enter den Satz
- * anspringt, ein Mausklick weiterhin an die Wortposition springt und die
+ * anspringt, ein Mausklick mitten im Text an den Satzanfang springt und die
  * Sprunglinks am Seitenanfang erst beim Fokussieren erscheinen.
  */
 import { chromium } from "playwright-core";
@@ -155,7 +155,9 @@ record(
   `${focusedId} → ${afterEnter.toFixed(1)} s`,
 );
 
-/* 4 – Mausklick auf ein Wort springt an die Wortposition */
+/* 4 – Mausklick mitten im Text springt an den Anfang dieses Satzes.
+   Wortzeiten liefert der Dienst nicht; sie wären innerhalb des Satzes geraten.
+   Verlässlich ist die Satzgrenze, und genau dorthin springt der Klick. */
 await page.evaluate(() => {
   const audio = document.querySelector("audio");
   if (audio) {
@@ -173,9 +175,13 @@ const wordSentenceStart = await page.evaluate((index) => {
   const row = span?.closest('[id^="satz-"]');
   return row?.querySelector("span")?.textContent ?? "";
 }, wordIndex);
+const [startMinutes, startSeconds] = wordSentenceStart.split(":").map(Number);
+const expectedStart = (startMinutes || 0) * 60 + (startSeconds || 0);
 record(
-  "Mausklick auf ein Wort springt weiterhin an die Wortposition",
-  afterWordClick > 0,
+  "Mausklick im Satztext springt an den Satzanfang",
+  // Der Klick startet die Wiedergabe; bis zur Messung läuft sie knapp eine
+  // Sekunde weiter. Geprüft wird deshalb ein Fenster, nicht ein Zeitpunkt.
+  afterWordClick > expectedStart - 0.5 && afterWordClick < expectedStart + 2.5,
   `Wort ${wordIndex} im Satz ab ${wordSentenceStart} → ${afterWordClick.toFixed(1)} s`,
 );
 await page.evaluate(() => document.querySelector("audio")?.pause());

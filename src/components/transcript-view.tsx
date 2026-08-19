@@ -50,10 +50,44 @@ const SPEAKER_TONES = [
   "bg-busy-soft text-busy",
 ];
 
+/**
+ * Ermittelt, welche Wörter einer Zeile zum Suchbegriff gehören.
+ *
+ * Der Vergleich läuft über den zusammengesetzten Satz und nicht über einzelne
+ * Wörter: Ein Begriff aus mehreren Wörtern („Guten Tag“) steckt in keinem
+ * einzelnen Wort, blieb bei der wortweisen Prüfung also unmarkiert, obwohl die
+ * Zeile als Treffer gezählt wurde. Ebenso findet die Suche jetzt Wortteile über
+ * Wortgrenzen hinweg.
+ */
+function matchedWordIndexes(words: { text: string }[], query: string): Set<number> {
+  const hits = new Set<number>();
+  const needle = query.trim().toLowerCase();
+  if (needle.length < 2) return hits;
+
+  const ranges: [number, number][] = [];
+  let offset = 0;
+  for (const word of words) {
+    ranges.push([offset, offset + word.text.length]);
+    offset += word.text.length + 1; // Trennzeichen zwischen zwei Wörtern
+  }
+  const haystack = words.map((word) => word.text).join(" ").toLowerCase();
+
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at < 0) break;
+    const end = at + needle.length;
+    ranges.forEach(([start, stop], index) => {
+      if (start < end && stop > at) hits.add(index);
+    });
+    from = at + needle.length;
+  }
+  return hits;
+}
+
 type RowProps = {
   sentence: FlatSentence;
   active: boolean;
-  activeWord: number;
   matchState: "keiner" | "treffer" | "aktuell";
   query: string;
   tone: string;
@@ -62,30 +96,37 @@ type RowProps = {
 };
 
 /**
- * Ein Satz ist genau eine Tabulator-Station.
+ * Ein Satz ist genau eine Tabulator-Station und genau eine Sprungmarke.
  *
  * Früher war jedes Wort fokussierbar; ein zwanzigminütiges Gespräch ergab damit
  * mehrere tausend Stationen, und die rechte Spalte mit Metadaten, Bewertung und
- * Kommentaren war per Tastatur praktisch unerreichbar. Deshalb ist nur noch die
- * Satzzeile selbst fokussierbar (Enter springt an den Satzanfang), während die
- * Wörter reine Schaltflächen für die Maus bleiben und weiterhin an die
- * Wortposition springen.
+ * Kommentaren war per Tastatur praktisch unerreichbar.
+ *
+ * Ebenso wurde früher das gerade gesprochene Wort einzeln hervorgehoben. Der
+ * Dienst liefert jedoch keine Wortzeiten – sie werden innerhalb des Satzes
+ * gleichmässig geschätzt (siehe `normalizeTranscript`). Die Markierung stand
+ * deshalb regelmässig auf einem anderen Wort als dem gehörten und blieb in
+ * Sprechpausen auf dem letzten Wort stehen. Belastbar ist die Satzgrenze,
+ * darum wird der laufende Satz als Ganzes hervorgehoben und ein Klick springt
+ * an dessen Anfang.
  */
 const SentenceRow = memo(function SentenceRow({
   sentence,
   active,
-  activeWord,
   matchState,
   query,
   tone,
   hintId,
   onSeek,
 }: RowProps) {
+  const hits = useMemo(() => matchedWordIndexes(sentence.words, query), [sentence.words, query]);
+
   return (
     <button
       type="button"
       id={`satz-${sentence.index}`}
       aria-describedby={hintId}
+      aria-current={active ? "true" : undefined}
       onClick={() => onSeek(sentence.startMs)}
       // select-text hält das Transkript kopierbar; Schaltflächen unterbinden
       // die Textauswahl sonst je nach Browser.
@@ -94,7 +135,9 @@ const SentenceRow = memo(function SentenceRow({
       }`}
     >
       <span
-        className="mt-0.5 shrink-0 font-mono text-[11px] tabular-nums text-ink-faint group-hover:text-petrol"
+        className={`mt-0.5 shrink-0 font-mono text-[11px] tabular-nums group-hover:text-petrol ${
+          active ? "font-semibold text-petrol" : "text-ink-faint"
+        }`}
         title="An diese Stelle springen"
       >
         {timecode(sentence.startMs)}
@@ -103,29 +146,16 @@ const SentenceRow = memo(function SentenceRow({
         {sentence.newSpeaker && (
           <span className={`badge mr-2 align-baseline ${tone}`}>{sentence.speakerLabel}</span>
         )}
-        {sentence.words.map((word, wordIndex) => {
-          const isActiveWord = active && wordIndex === activeWord;
-          const isMatch =
-            query.length >= 2 && word.text.toLowerCase().includes(query.toLowerCase());
-          return (
-            <span
-              key={wordIndex}
-              data-wort=""
-              // Der Klick auf ein Wort springt an die Wortposition und darf
-              // deshalb nicht zusätzlich den Satzanfang der Zeile auslösen.
-              onClick={(event) => {
-                event.stopPropagation();
-                onSeek(word.startMs);
-              }}
-              className={`cursor-pointer rounded-[2px] ${
-                isActiveWord ? "bg-petrol text-white" : isMatch ? "bg-[#fdeaa8]" : "hover:bg-line"
-              }`}
-            >
-              {word.text}
-              {wordIndex < sentence.words.length - 1 ? " " : ""}
-            </span>
-          );
-        })}
+        {sentence.words.map((word, wordIndex) => (
+          <span
+            key={wordIndex}
+            data-wort=""
+            className={hits.has(wordIndex) ? "rounded-[2px] bg-[#fdeaa8]" : undefined}
+          >
+            {word.text}
+            {wordIndex < sentence.words.length - 1 ? " " : ""}
+          </span>
+        ))}
       </span>
     </button>
   );
@@ -165,43 +195,84 @@ export function TranscriptView({
     return sentences.filter((sentence) => sentence.text.toLowerCase().includes(needle));
   }, [query, sentences]);
 
+  /**
+   * Anfangszeiten, streng aufsteigend gemacht.
+   *
+   * Beim Zusammensetzen abschnittsweise transkribierter Aufnahmen können sich
+   * die Zeitbereiche zweier Abschnitte an der Nahtstelle geringfügig
+   * überlappen. Eine Suche, die auf lückenlos getrennte Bereiche baut, findet
+   * dann zeitweise gar keinen Satz – die Markierung sprang deshalb aus der
+   * Liste. Mit monoton korrigierten Anfangszeiten gilt schlicht: laufend ist
+   * der zuletzt begonnene Satz.
+   */
+  const starts = useMemo(() => {
+    const list: number[] = [];
+    let previous = -1;
+    for (const sentence of sentences) {
+      previous = Math.max(previous + 1, sentence.startMs);
+      list.push(previous);
+    }
+    return list;
+  }, [sentences]);
+
   const activeIndex = useMemo(() => {
     let low = 0;
-    let high = sentences.length - 1;
+    let high = starts.length - 1;
     let found = -1;
     while (low <= high) {
       const middle = (low + high) >> 1;
-      const sentence = sentences[middle];
-      if (currentMs < sentence.startMs) high = middle - 1;
-      else if (currentMs > sentence.endMs) low = middle + 1;
-      else {
+      if (starts[middle] <= currentMs) {
         found = middle;
-        break;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
       }
     }
-    if (found === -1 && high >= 0 && currentMs > sentences[high]?.endMs) return high;
     return found;
-  }, [currentMs, sentences]);
+  }, [currentMs, starts]);
 
-  const activeWord = useMemo(() => {
-    if (activeIndex < 0) return -1;
-    const words = sentences[activeIndex].words;
-    for (let index = words.length - 1; index >= 0; index -= 1) {
-      if (currentMs >= words[index].startMs) return index;
-    }
-    return -1;
-  }, [activeIndex, currentMs, sentences]);
+  /**
+   * Holt eine Zeile in den sichtbaren Ausschnitt – aber nur, wenn sie ihn
+   * verlassen hat.
+   *
+   * Gemessen wird gegen den Behälter, nicht gegen die Seite: `offsetTop` zählt
+   * bis zum nächsten positionierten Vorfahren, und der ist hier das Dokument.
+   * Die frühere Rechnung addierte deshalb die gesamte Seitenhöhe oberhalb der
+   * Karte zum Ziel und warf die Liste bei jedem Satzwechsel ans Ende – das
+   * waren die unvermittelten Sprünge.
+   *
+   * Ausserdem wird nicht mehr bei jedem Satz nachzentriert, sondern erst, wenn
+   * die laufende Zeile aus dem Ausschnitt läuft. Die Liste steht dadurch still
+   * und rückt einmal je Bildschirmhöhe nach.
+   */
+  function revealRow(index: number, mode: "sanft" | "immer") {
+    const container = containerRef.current;
+    const element = document.getElementById(`satz-${index}`);
+    if (!container || !element) return;
+
+    const box = container.getBoundingClientRect();
+    const row = element.getBoundingClientRect();
+    const rand = 12;
+    if (mode === "sanft" && row.top >= box.top + rand && row.bottom <= box.bottom - rand) return;
+
+    const relativeTop = row.top - box.top + container.scrollTop;
+    const limit = container.scrollHeight - container.clientHeight;
+    const target = Math.max(0, Math.min(limit, relativeTop - container.clientHeight / 3));
+    const distance = Math.abs(target - container.scrollTop);
+    if (distance < 2) return;
+    // Über weite Strecken – etwa nach einem Sprung in der Suche – wäre die
+    // weiche Bewegung ein langer Flug durch das halbe Transkript.
+    container.scrollTo({
+      top: target,
+      behavior: distance > container.clientHeight * 1.5 ? "auto" : "smooth",
+    });
+  }
 
   useEffect(() => {
     if (!follow || activeIndex < 0) return;
-    const element = document.getElementById(`satz-${activeIndex}`);
-    const container = containerRef.current;
-    if (!element || !container) return;
-    const elementTop = element.offsetTop;
-    const target = elementTop - container.clientHeight / 2;
-    if (Math.abs(container.scrollTop - target) > 40) {
-      container.scrollTo({ top: target, behavior: "smooth" });
-    }
+    // revealRow liest Behälter und Zeile beim Aufruf aus dem DOM; ausser dem
+    // Satzwechsel und dem Kästchen gibt es nichts, worauf zu reagieren wäre.
+    revealRow(activeIndex, "sanft");
   }, [activeIndex, follow]);
 
   function goToMatch(next: number) {
@@ -210,12 +281,8 @@ export function TranscriptView({
     setMatchPosition(position);
     const sentence = matches[position];
     setFollow(false);
-    const element = document.getElementById(`satz-${sentence.index}`);
-    const container = containerRef.current;
-    if (element && container) {
-      container.scrollTo({ top: element.offsetTop - container.clientHeight / 3, behavior: "smooth" });
-    }
     onSeek(sentence.startMs);
+    revealRow(sentence.index, "immer");
   }
 
   const currentMatchIndex = matches[matchPosition]?.index ?? -1;
@@ -288,17 +355,25 @@ export function TranscriptView({
         </div>
       </div>
       <p id={hintId} className="sr-only">
-        Enter spielt die Aufnahme ab dem Anfang dieses Satzes ab. Ein Mausklick auf ein einzelnes
-        Wort springt an die Position dieses Wortes.
+        Enter spielt die Aufnahme ab dem Anfang dieses Satzes ab.
       </p>
-      <div ref={containerRef} className="max-h-[560px] min-h-[320px] overflow-y-auto p-2">
+      {/* Scrollt jemand von Hand, ist das Mitlaufen nicht mehr erwünscht: Sonst
+          zöge die Wiedergabe die Liste sofort wieder zurück und die Ansicht
+          ruckelte zwischen beiden Absichten hin und her. Gehorcht wird dem
+          Rad und dem Finger, nicht dem Scroll-Ereignis – das löst auch die
+          eigene Bewegung aus und schaltete sich damit selbst ab. */}
+      <div
+        ref={containerRef}
+        onWheel={() => setFollow(false)}
+        onTouchMove={() => setFollow(false)}
+        className="max-h-[560px] min-h-[320px] overflow-y-auto p-2"
+      >
         {sentences.map((sentence) => (
           <SentenceRow
             key={sentence.index}
             hintId={hintId}
             sentence={sentence}
             active={sentence.index === activeIndex}
-            activeWord={sentence.index === activeIndex ? activeWord : -1}
             matchState={
               sentence.index === currentMatchIndex
                 ? "aktuell"

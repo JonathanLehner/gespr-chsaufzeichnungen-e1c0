@@ -519,7 +519,7 @@ const sentence = sentences.nth(Math.min(4, (await sentences.count()) - 1));
 await sentence.locator("span[data-wort]").first().click();
 await page.waitForTimeout(800);
 const seeked = await page.evaluate(() => document.querySelector("audio")?.currentTime ?? 0);
-record("Klick auf Wort springt im Audio", seeked > 0, `${seeked.toFixed(1)} s`);
+record("Klick auf einen Satz springt im Audio", seeked > 0, `${seeked.toFixed(1)} s`);
 
 /* 8b – Synchron mitlaufendes Transkript */
 await page.click('button:has-text("Abspielen")');

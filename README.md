@@ -22,10 +22,16 @@ Verkaufsgespräche der Immotrust AG.
 - **Aufnahmenübersicht**: Tabelle mit allen Metadaten, Volltextsuche über Metadaten und Transkripte
   mit hervorgehobenen Ausschnitten, Filter, Sortierung und serverseitige Seitennavigation.
 - **Detailansicht**: WaveSurfer.js-Player (Wiedergabe, Scrubbing, Lautstärke, Tempo), synchron
-  mitlaufendes Transkript, Sprung per Klick auf Wort oder Satz, Suche im Transkript, Kommentare und
+  mitlaufendes Transkript, Sprung per Klick auf einen Satz, Suche im Transkript, Kommentare und
   persönliche Bewertung von 1 bis 10.
+- **Mitlaufen im Transkript**: Hervorgehoben wird der laufende Satz, nicht das einzelne Wort. Der
+  Dienst liefert keine Wortzeiten; sie werden innerhalb des Satzes geschätzt und die Wortmarkierung
+  stand deshalb regelmässig auf einem anderen Wort als dem gehörten. Die Liste rückt erst nach,
+  wenn die laufende Zeile den Ausschnitt verlässt, und gemessen wird dabei gegen die Liste statt
+  gegen die Seite – vorher sprang sie bei jedem Satzwechsel ans Ende. Scrollen von Hand schaltet
+  das Kästchen „Mitlaufen“ ab, damit die Wiedergabe die Ansicht nicht zurückzieht.
 - **Tastaturbedienung der Detailansicht**: Im Transkript ist genau ein Satz eine Tabulator-Station;
-  Enter springt an den Satzanfang, der Mausklick auf ein Wort weiterhin an die Wortposition. Am
+  Enter springt an den Satzanfang, ein Mausklick mitten im Text ebenso. Am
   Anfang des Seiteninhalts stehen die Sprunglinks „Zum Transkript“ und „Zu den Metadaten und
   Kommentaren“, die erst beim Fokussieren sichtbar werden.
 - **Löschungen**: Mitarbeitende setzen nur eine Löschmarkierung („Zur Löschung markieren“ /
@@ -117,9 +123,14 @@ liegt nicht im Repository. `cleanup-testdata.mts` entfernt anschliessend die dab
 Testkonten, Testaufnahmen, Kommentare und Bewertungen.
 
 `check-tastatur.mjs` prüft die Detailansicht allein mit der Tastatur: eine Tabulator-Station je Satz,
-Enter als Sprung an die Audioposition, Mausklick auf ein Wort als Sprung an die Wortposition sowie
+Enter als Sprung an die Audioposition, Mausklick im Satztext als Sprung an den Satzanfang sowie
 Sichtbarkeit und Ziel der beiden Sprunglinks. Es wählt dafür das längste vorhandene Transkript und
 meldet sich mit `PRUEF_EMAIL` (Vorgabe: ein Mitarbeitendenkonto) und `PRUEF_PASSWORT` an.
+
+`check-mitlaufen.mjs` spielt eine transkribierte Aufnahme im Browser ab und misst das Mitlaufen:
+kein einzeln markiertes Wort, die laufende Zeile bleibt im sichtbaren Ausschnitt, die Liste bewegt
+sich höchstens um ihre eigene Höhe je Schritt, Scrollen von Hand schaltet das Mitlaufen ab und ein
+Suchbegriff über mehrere Wörter wird markiert. Anmeldung über `CHECK_EMAIL`/`CHECK_PASSWORD`.
 
 `check-einstellungen.mjs` prüft die Seite „Einstellungen“ im Browser: Erreichbarkeit über die
 Navigation, den vorbelegten Namen, die Abweisung zu kurzer Eingaben, das Speichern samt sofortiger
