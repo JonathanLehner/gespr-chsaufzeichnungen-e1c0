@@ -236,8 +236,8 @@ export async function toggleDeletionFlagAction(
   return {
     ok: true,
     message: flagged
-      ? "Die Aufnahme wurde zum Löschen vorgemerkt."
-      : "Die Löschung wurde zurückgenommen.",
+      ? "Zur Löschung vorgemerkt – über die endgültige Löschung entscheidet die Administration."
+      : "Die Löschmarkierung wurde aufgehoben.",
   };
 }
 

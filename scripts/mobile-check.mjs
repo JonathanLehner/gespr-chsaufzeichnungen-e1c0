@@ -136,7 +136,7 @@ record("Öffnen und Löschmarkierung erreichbar", actionsVisible);
 await page.screenshot({ path: join(OUT, "03-karten.png"), fullPage: false });
 
 /* Löschmarkierung aufklappen: das Begründungsfeld muss in die Karte passen */
-const flagButton = firstRow.locator('button:text-is("Löschen")');
+const flagButton = firstRow.locator('button:text-is("Zur Löschung markieren")');
 if ((await flagButton.count()) > 0) {
   await flagButton.click();
   await page.waitForTimeout(400);

@@ -7,9 +7,13 @@ import { listRecordings, type SortKey } from "@/lib/recordings";
 import { sweepQueue } from "@/lib/transcription";
 import { describeTranscriptionError } from "@/lib/transcription-errors";
 import { cetDayStartUtcIso, formatDateTime, formatDuration } from "@/lib/time";
-import { DeletionBadge, RatingValue, StatusBadge } from "@/components/status";
+import { RatingValue, StatusBadge } from "@/components/status";
 import { RecordingsFilter, type FilterValues } from "@/components/recordings-filter";
-import { DeletionFlagButton } from "@/components/deletion-flag-button";
+import {
+  DeletionFlagBadge,
+  DeletionFlagButton,
+  DeletionFlagProvider,
+} from "@/components/deletion-flag";
 import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
 import { TranscriptionWatcher, type WatchedRecording } from "@/components/transcription-watcher";
 import type { TranscriptionStatus } from "@/lib/types";
@@ -213,31 +217,36 @@ export default async function AufnahmenPage({
                         )}
                       </span>
                     </td>
-                    <td className="td" data-cell="wert">
-                      <CardLabel>Löschmarkierung</CardLabel>
-                      <span className="block">
-                        <DeletionBadge flagged={row.deletionFlagged} />
-                        {row.deletionFlagged && row.deletionFlaggedBy && (
-                          <span className="mt-0.5 block text-[11px] text-ink-faint">
-                            {row.deletionFlaggedBy}
-                          </span>
-                        )}
-                      </span>
-                    </td>
-                    <td className="td" data-cell="aktion">
-                      <div className="flex flex-wrap items-start gap-2 min-[700px]:flex-col min-[700px]:gap-1">
-                        <Link href={`/aufnahmen/${row._id}`} className="btn btn-ghost">
-                          Öffnen
-                        </Link>
-                        {row.transcriptionStatus === "fehlgeschlagen" && (
-                          <RetryTranscriptionButton
-                            key={row.transcriptionFinishedAt ?? "neu"}
-                            recordingId={row._id}
+                    {/* Badge und Schaltfläche teilen sich den Zustand, damit die Zeile
+                        sofort nach dem Klick umschaltet und nicht erst nach dem Neuladen. */}
+                    <DeletionFlagProvider recordingId={row._id} flagged={row.deletionFlagged}>
+                      <td className="td" data-cell="wert">
+                        <CardLabel>Löschmarkierung</CardLabel>
+                        <span className="block">
+                          <DeletionFlagBadge
+                            flagged={row.deletionFlagged}
+                            flaggedBy={row.deletionFlaggedBy}
                           />
-                        )}
-                        <DeletionFlagButton recordingId={row._id} flagged={row.deletionFlagged} />
-                      </div>
-                    </td>
+                        </span>
+                      </td>
+                      <td className="td" data-cell="aktion">
+                        <div className="flex flex-wrap items-start gap-2 min-[700px]:flex-col min-[700px]:gap-1">
+                          <Link href={`/aufnahmen/${row._id}`} className="btn btn-ghost">
+                            Öffnen
+                          </Link>
+                          {row.transcriptionStatus === "fehlgeschlagen" && (
+                            <RetryTranscriptionButton
+                              key={row.transcriptionFinishedAt ?? "neu"}
+                              recordingId={row._id}
+                            />
+                          )}
+                          <DeletionFlagButton
+                            recordingId={row._id}
+                            flagged={row.deletionFlagged}
+                          />
+                        </div>
+                      </td>
+                    </DeletionFlagProvider>
                   </tr>
                   {(row.hits.length > 0 || row.matchedFields.length > 0) && (
                     <tr className="bg-petrol-soft/40" data-row="treffer">

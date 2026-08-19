@@ -18,7 +18,9 @@ Verkaufsgespräche der Immotrust AG.
 - **Detailansicht**: WaveSurfer.js-Player (Wiedergabe, Scrubbing, Lautstärke, Tempo), synchron
   mitlaufendes Transkript, Sprung per Klick auf Wort oder Satz, Suche im Transkript, Kommentare und
   persönliche Bewertung von 1 bis 10.
-- **Löschungen**: Mitarbeitende setzen nur eine Löschmarkierung. Endgültig gelöscht wird
+- **Löschungen**: Mitarbeitende setzen nur eine Löschmarkierung („Zur Löschung markieren“ /
+  „Markierung bestätigen“). Zeilenstatus und Beschriftung wechseln sofort nach dem Klick, während
+  des Speicherns erscheint ein Wartehinweis, danach eine kurze Bestätigung. Endgültig gelöscht wird
   ausschliesslich im Admin-Dashboard, inklusive Audio, Transkript, Kommentaren und Bewertungen.
 - **Admin-Dashboard**: Editor für die Dateinamensvorlage mit Testfeld und Parse-Vorschau,
   Auftragsübersicht, manueller Neustart fehlgeschlagener Transkriptionen, Liste der Löschmarkierungen,

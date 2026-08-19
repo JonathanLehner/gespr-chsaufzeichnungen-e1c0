@@ -12,7 +12,7 @@ import { StatusBadge } from "@/components/status";
 import { RecordingPlayerPanel } from "@/components/recording-player-panel";
 import { CommentsPanel } from "@/components/comments-panel";
 import { RatingPanel } from "@/components/rating-panel";
-import { DeletionFlagButton } from "@/components/deletion-flag-button";
+import { DeletionFlagButton } from "@/components/deletion-flag";
 import { TranscriptionWatcher } from "@/components/transcription-watcher";
 import type { Job } from "@/lib/types";
 

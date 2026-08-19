@@ -576,12 +576,12 @@ record("Bewertung gespeichert", true);
 await shot("09-kommentar-bewertung");
 
 /* 10 – Löschmarkierung durch Mitarbeitende */
-await page.click('button:text-is("Löschen")');
+await page.click('button:text-is("Zur Löschung markieren")');
 await page.fill('input[id^="grund-"]', "Prüfung durch die Qualitätssicherung");
-await page.click('button:text-is("Löschen bestätigen")');
-await page.waitForSelector("text=zum Löschen vorgemerkt", { timeout: 15000 });
+await page.click('button:text-is("Markierung bestätigen")');
+await page.waitForSelector("text=Zur Löschung vorgemerkt", { timeout: 15000 });
 record("Löschmarkierung gesetzt ohne Datenverlust", (await page.locator("canvas").count()) > 0);
-await page.click('button:text-is("Löschung zurücknehmen")');
+await page.click('button:text-is("Markierung aufheben")');
 await page.waitForTimeout(2000);
 
 /* 11 – Sammelupload */
@@ -827,11 +827,11 @@ for (const name of TEST_NAMES) {
   const testRow = page.locator("tbody tr", { hasText: name }).first();
   if ((await testRow.count()) === 0) continue;
   // Eine Testaufnahme aus einem abgebrochenen Lauf kann bereits markiert sein.
-  const markButton = testRow.locator('button:text-is("Löschen")');
+  const markButton = testRow.locator('button:text-is("Zur Löschung markieren")');
   if ((await markButton.count()) > 0) {
     await markButton.click();
     await page.fill('input[id^="grund-"]', "Testaufnahme der automatischen Prüfung");
-    await page.click('button:text-is("Löschen bestätigen")');
+    await page.click('button:text-is("Markierung bestätigen")');
     await page.waitForTimeout(2500);
   }
 
