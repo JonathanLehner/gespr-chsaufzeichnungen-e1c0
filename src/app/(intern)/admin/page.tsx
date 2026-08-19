@@ -6,12 +6,13 @@ import { displayableLink } from "@/lib/mail-outbox";
 import { DELIVERY_LABELS, PROVIDER_LABELS } from "@/lib/mail-config";
 import { mailOverview } from "@/lib/mailer";
 import { getTemplateSettings } from "@/lib/settings";
-import { countByStatus, listJobs, listRecordings } from "@/lib/recordings";
+import { countByStatus, listAllComments, listJobs, listRecordings } from "@/lib/recordings";
 import { formatDateTime, formatDateTimeWithSeconds } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { TemplateEditor } from "@/components/template-editor";
 import { MailSettingsEditor } from "@/components/mail-settings-editor";
 import {
+  CommentDeleteButton,
   HardDeleteButton,
   ResetLinkButton,
   RetryButton,
@@ -54,9 +55,10 @@ export default async function AdminPage() {
       mailOverview(),
     ]);
 
-  const [commentCount, ratingCount] = await Promise.all([
+  const [commentCount, ratingCount, commentOverview] = await Promise.all([
     countDocuments(Collections.comments, {}),
     countDocuments(Collections.ratings, {}),
+    listAllComments(),
   ]);
 
   const flaggedCommentCounts = new Map(
@@ -238,6 +240,70 @@ export default async function AdminPage() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      <section className="card p-5">
+        <h2 className="text-[15px] font-semibold text-ink">Kommentare ({commentCount})</h2>
+        <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-ink-soft">
+          Mitarbeitende bearbeiten und löschen ausschliesslich ihre eigenen Kommentare. Fremde
+          Beiträge – etwa eine falsch zugeordnete Beobachtung – entfernen Sie hier. Die Aufnahme
+          selbst bleibt dabei unberührt.
+          {commentOverview.truncated
+            ? " Es werden nicht alle Kommentare geladen; öffnen Sie in diesem Fall die Aufnahme direkt."
+            : ""}
+        </p>
+
+        {commentOverview.rows.length === 0 ? (
+          <p className="mt-4 text-[13px] text-ink-soft">Es besteht noch kein Kommentar.</p>
+        ) : (
+          <>
+            <ul className="mt-4 space-y-2">
+              {commentOverview.rows.map((comment) => (
+                <li key={comment._id} className="rounded-[4px] border border-line bg-canvas/60 p-3">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="text-[13px] font-semibold text-ink">{comment.authorName}</span>
+                    <span className="font-mono text-[11px] text-ink-faint">
+                      {comment.authorEmail}
+                    </span>
+                    <span className="text-[11px] text-ink-faint">
+                      {formatDateTimeWithSeconds(comment.createdAt)}
+                    </span>
+                    {comment.editedAt && (
+                      <span className="text-[11px] italic text-ink-faint">
+                        bearbeitet am {formatDateTimeWithSeconds(comment.editedAt)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11.5px] text-ink-faint">
+                    zu{" "}
+                    <Link
+                      href={`/aufnahmen/${comment.recordingId}`}
+                      className="text-petrol hover:underline"
+                    >
+                      {comment.callerName}
+                    </Link>{" "}
+                    <span className="font-mono">{comment.originalFilename}</span>
+                  </p>
+                  <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+                    {comment.text}
+                  </p>
+                  <div className="mt-2">
+                    <CommentDeleteButton
+                      commentId={comment._id}
+                      authorName={comment.authorName}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {commentOverview.total > commentOverview.rows.length && (
+              <p className="mt-3 text-[12px] text-ink-faint">
+                Angezeigt werden die {commentOverview.rows.length} neuesten von{" "}
+                {commentOverview.total} geladenen Kommentaren.
+              </p>
+            )}
+          </>
         )}
       </section>
 

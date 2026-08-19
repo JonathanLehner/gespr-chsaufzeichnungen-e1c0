@@ -3,8 +3,16 @@
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/lib/auth";
-import { Collections, findById, findMany, insertOne, upsertById } from "@/lib/db";
+import { normalizeEmail, requireUser } from "@/lib/auth";
+import {
+  Collections,
+  deleteById,
+  findById,
+  findMany,
+  insertOne,
+  updateOne,
+  upsertById,
+} from "@/lib/db";
 import {
   getRecording,
   invalidateRecordingCache,
@@ -21,7 +29,7 @@ import {
 import { getTemplateSettings } from "@/lib/settings";
 import { parseFilename } from "@/lib/filename-template";
 import { mimeFromExtension, fingerprintOf, MAX_UPLOAD_BYTES } from "@/lib/audio";
-import type { Rating, Recording, TranscriptionStatus } from "@/lib/types";
+import type { Comment, Rating, Recording, TranscriptionStatus } from "@/lib/types";
 
 export type ActionResult = { ok: boolean; message: string };
 
@@ -259,9 +267,55 @@ export async function addCommentAction(recordingId: string, text: string): Promi
     authorEmail: user.email,
     authorName: user.name,
     createdAt: new Date().toISOString(),
+    editedAt: null,
   });
   revalidatePath(`/aufnahmen/${recordingId}`);
+  revalidatePath("/admin");
   return { ok: true, message: "Kommentar gespeichert." };
+}
+
+/**
+ * Ändert den Text eines eigenen Kommentars. Fremde Kommentare bleiben
+ * unantastbar – sie entfernt ausschliesslich der Superuser im Admin-Dashboard.
+ */
+export async function updateCommentAction(commentId: string, text: string): Promise<ActionResult> {
+  const user = await requireUser();
+  const trimmed = text.trim();
+  if (trimmed.length < 2) return { ok: false, message: "Bitte geben Sie einen Kommentartext ein." };
+  if (trimmed.length > 4000) return { ok: false, message: "Der Kommentar ist zu lang (max. 4000 Zeichen)." };
+
+  const comment = await findById<Comment>(Collections.comments, commentId);
+  if (!comment) return { ok: false, message: "Der Kommentar besteht nicht mehr." };
+  if (normalizeEmail(comment.authorEmail) !== normalizeEmail(user.email)) {
+    return { ok: false, message: "Sie können ausschliesslich Ihre eigenen Kommentare bearbeiten." };
+  }
+  if (trimmed === comment.text) {
+    return { ok: true, message: "Der Kommentar wurde nicht verändert." };
+  }
+
+  await updateOne(
+    Collections.comments,
+    { _id: commentId },
+    { $set: { text: trimmed, editedAt: new Date().toISOString() } },
+  );
+  revalidatePath(`/aufnahmen/${comment.recordingId}`);
+  revalidatePath("/admin");
+  return { ok: true, message: "Kommentar geändert." };
+}
+
+/** Löscht einen eigenen Kommentar. Ein zweiter Aufruf meldet denselben Erfolg. */
+export async function deleteCommentAction(commentId: string): Promise<ActionResult> {
+  const user = await requireUser();
+  const comment = await findById<Comment>(Collections.comments, commentId);
+  if (!comment) return { ok: true, message: "Der Kommentar wurde bereits gelöscht." };
+  if (normalizeEmail(comment.authorEmail) !== normalizeEmail(user.email)) {
+    return { ok: false, message: "Sie können ausschliesslich Ihre eigenen Kommentare löschen." };
+  }
+
+  await deleteById(Collections.comments, commentId);
+  revalidatePath(`/aufnahmen/${comment.recordingId}`);
+  revalidatePath("/admin");
+  return { ok: true, message: "Kommentar gelöscht." };
 }
 
 /* ------------------------------------------------------------ Bewertungen */

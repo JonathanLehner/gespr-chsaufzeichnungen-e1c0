@@ -108,6 +108,12 @@ export type Comment = {
   authorEmail: string;
   authorName: string;
   createdAt: string;
+  /**
+   * Zeitpunkt der letzten Änderung am Text. Fehlt bei Kommentaren aus der Zeit
+   * vor der Bearbeitungsmöglichkeit und bleibt `null`, solange der Kommentar
+   * unverändert ist.
+   */
+  editedAt?: string | null;
 };
 
 export type Rating = {

@@ -3,7 +3,7 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSuperuser, normalizeEmail, requireAdmin } from "@/lib/auth";
-import { Collections, findById } from "@/lib/db";
+import { Collections, deleteById, findById } from "@/lib/db";
 import {
   DEFAULT_TEMPLATE,
   parseFilename,
@@ -16,7 +16,7 @@ import { saveMailSettings } from "@/lib/mailer";
 import { saveTemplate } from "@/lib/settings";
 import { getRecording, hardDeleteRecording } from "@/lib/recordings";
 import { requeueTranscription, runPendingJobs, transcribeRecording } from "@/lib/transcription";
-import type { User } from "@/lib/types";
+import type { Comment, User } from "@/lib/types";
 
 export type TemplatePreview = {
   validation: TemplateValidation;
@@ -193,6 +193,24 @@ export async function sendTestMailAction(to: string): Promise<{ ok: boolean; mes
     ok: false,
     message: `${DELIVERY_LABELS[delivery.status]}: ${delivery.error ?? "unbekannter Fehler"}`,
   };
+}
+
+/**
+ * Entfernt einen beliebigen Kommentar. Mitarbeitende bearbeiten und löschen
+ * ausschliesslich ihre eigenen Kommentare (siehe `actions/recordings.ts`);
+ * fremde Beiträge entfernt nur der Superuser an dieser Stelle.
+ */
+export async function deleteForeignCommentAction(
+  commentId: string,
+): Promise<{ ok: boolean; message: string }> {
+  await requireAdmin();
+  const comment = await findById<Comment>(Collections.comments, commentId);
+  if (!comment) return { ok: true, message: "Der Kommentar wurde bereits entfernt." };
+
+  await deleteById(Collections.comments, commentId);
+  revalidatePath("/admin");
+  revalidatePath(`/aufnahmen/${comment.recordingId}`);
+  return { ok: true, message: `Kommentar von ${comment.authorName} entfernt.` };
 }
 
 export async function hardDeleteRecordingAction(

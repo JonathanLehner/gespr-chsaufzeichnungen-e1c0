@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
   createPasswordResetLinkAction,
+  deleteForeignCommentAction,
   hardDeleteRecordingAction,
   retryTranscriptionAction,
   runQueueAction,
@@ -134,6 +135,66 @@ export function ResetLinkButton({ email }: { email: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Entfernt einen fremden Kommentar. Die Rückfrage erscheint an Ort und Stelle,
+ * weil hier – anders als beim endgültigen Löschen einer Aufnahme – nur ein
+ * einzelner Beitrag betroffen ist.
+ */
+export function CommentDeleteButton({
+  commentId,
+  authorName,
+}: {
+  commentId: string;
+  authorName: string;
+}) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
+
+  function remove() {
+    if (pending) return;
+    startTransition(async () => {
+      const result = await deleteForeignCommentAction(commentId);
+      setMessage(result.message);
+      setConfirming(false);
+      router.refresh();
+    });
+  }
+
+  if (message && !confirming) return <p className="text-[11.5px] text-ink-faint">{message}</p>;
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={pending}
+        onClick={() => setConfirming(true)}
+      >
+        Kommentar entfernen
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[11.5px] text-ink">Kommentar von {authorName} entfernen?</span>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        disabled={pending}
+        onClick={() => setConfirming(false)}
+      >
+        Abbrechen
+      </button>
+      <button type="button" className="btn btn-danger" disabled={pending} onClick={remove}>
+        {pending ? "Wird entfernt …" : "Entfernen"}
+      </button>
     </div>
   );
 }

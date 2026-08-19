@@ -5,6 +5,7 @@ import {
   countDocuments,
   deleteById,
   deleteMany,
+  FIND_LIMIT,
   findById,
   findMany,
   insertUnique,
@@ -333,6 +334,50 @@ export async function hardDeleteRecording(recordingId: string): Promise<void> {
 export async function listComments(recordingId: string): Promise<Comment[]> {
   const rows = await findMany<Comment>(Collections.comments, { recordingId });
   return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export type CommentWithRecording = Comment & {
+  callerName: string;
+  originalFilename: string;
+};
+
+export type CommentOverview = {
+  rows: CommentWithRecording[];
+  total: number;
+  /** Wahr, wenn eine Teilabfrage an die Grenze des Endpunkts gestossen ist. */
+  truncated: boolean;
+};
+
+/** Aufnahmen je Abfrage; bei mehr Kommentaren als `FIND_LIMIT` wäre die Antwort unvollständig. */
+const COMMENT_SCAN_CHUNK = 5;
+
+/**
+ * Liest die Kommentare aller Aufnahmen für das Admin-Dashboard. Der
+ * Plattform-Endpunkt liefert höchstens `FIND_LIMIT` Dokumente je Abfrage und
+ * kennt keine Sortierung, deshalb werden die Aufnahmen in kleinen Gruppen
+ * abgefragt und die Kommentare anschliessend serverseitig sortiert.
+ */
+export async function listAllComments(limit = 40): Promise<CommentOverview> {
+  const recordings = await loadAllRecordings();
+  const chunks: string[][] = [];
+  for (let index = 0; index < recordings.length; index += COMMENT_SCAN_CHUNK) {
+    chunks.push(recordings.slice(index, index + COMMENT_SCAN_CHUNK).map((row) => row._id));
+  }
+  const pages = await Promise.all(
+    chunks.map((ids) => findMany<Comment>(Collections.comments, { recordingId: { $in: ids } })),
+  );
+  const byRecording = new Map(recordings.map((row) => [row._id, row]));
+  const all = pages.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return {
+    total: all.length,
+    truncated: pages.some((page) => page.length >= FIND_LIMIT),
+    rows: all.slice(0, limit).map((comment) => ({
+      ...comment,
+      callerName: byRecording.get(comment.recordingId)?.callerName ?? "Unbekannte Aufnahme",
+      originalFilename: byRecording.get(comment.recordingId)?.originalFilename ?? comment.recordingId,
+    })),
+  };
 }
 
 export async function listRatings(recordingId: string): Promise<Rating[]> {

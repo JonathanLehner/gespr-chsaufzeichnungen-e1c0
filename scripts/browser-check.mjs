@@ -583,10 +583,18 @@ const stopsBeforeComments = await page.evaluate(() => {
   ];
   return stops.indexOf(document.getElementById("kommentar"));
 });
+// Jeder eigene Kommentar trägt „Bearbeiten“ und „Löschen“ und damit zwei
+// zusätzliche Stationen; sie zählen nicht gegen das Budget des Transkripts.
+const ownCommentStops = await page.evaluate(
+  () =>
+    [...document.querySelectorAll("button")].filter((button) =>
+      ["Bearbeiten", "Löschen"].includes(button.textContent.trim()),
+    ).length,
+);
 record(
   "Metadaten, Bewertung und Kommentare per Tastatur erreichbar",
-  stopsBeforeComments > 0 && stopsBeforeComments <= sentenceCount + 40,
-  `${stopsBeforeComments} Stationen bis zum Kommentarfeld statt über ${wordCountInTranscript} Wörter`,
+  stopsBeforeComments > 0 && stopsBeforeComments <= sentenceCount + 40 + ownCommentStops,
+  `${stopsBeforeComments} Stationen bis zum Kommentarfeld (davon ${ownCommentStops} eigene Kommentaraktionen) statt über ${wordCountInTranscript} Wörter`,
 );
 
 await page.evaluate(() => {
@@ -657,7 +665,7 @@ record("Suche im Transkript", /Treffer \d+ von \d+/.test(matchInfo), `„${needl
 await page.click('button[aria-label="Nächster Treffer"]');
 await page.waitForTimeout(500);
 
-/* 9 – Kommentar und Bewertung */
+/* 9 – Kommentar anlegen, bearbeiten, löschen sowie Bewertung */
 const commentText = `Automatische Prüfung ${new Date().toISOString()}`;
 await page.fill("#kommentar", commentText);
 await page.click('button:has-text("Kommentar speichern")');
@@ -668,6 +676,59 @@ await page.click('button[aria-pressed="false"]:has-text("7")');
 await page.waitForSelector("text=/Bewertung gespeichert|Bewertung wurde aktualisiert/", { timeout: 15000 });
 record("Bewertung gespeichert", true);
 await shot("09-kommentar-bewertung");
+
+/* 9b – Eigener Kommentar: bearbeiten mit Änderungshinweis, danach löschen.
+   Fremde Kommentare dürfen diese Schaltflächen nicht tragen. */
+let ownComment = page.locator("article", { hasText: commentText });
+await ownComment.getByRole("button", { name: "Bearbeiten" }).click();
+const editedText = `${commentText} – korrigiert`;
+await ownComment.locator("textarea").fill(editedText);
+await ownComment.getByRole("button", { name: "Änderung speichern" }).click();
+await page.waitForSelector(`text=${editedText.slice(0, 30)}`, { timeout: 15000 });
+ownComment = page.locator("article", { hasText: editedText });
+const editedNote = await ownComment.locator("text=/bearbeitet am/").first().innerText();
+record(
+  "Eigener Kommentar bearbeitet und als geändert gekennzeichnet",
+  (await ownComment.innerText()).includes("korrigiert") && /bearbeitet am/.test(editedNote),
+  editedNote.trim(),
+);
+await shot("09b-kommentar-bearbeitet");
+
+const foreignCommentActions = await page.evaluate(() => {
+  const articles = [...document.querySelectorAll("article")].filter((node) =>
+    [...node.querySelectorAll("button")].some((button) => button.textContent.trim() === "Bearbeiten"),
+  );
+  return articles.filter((node) => !node.querySelector(".badge")).length;
+});
+record(
+  "Bearbeiten und Löschen nur am eigenen Kommentar",
+  foreignCommentActions === 0,
+  `${foreignCommentActions} fremde Kommentare mit Aktionen`,
+);
+
+await ownComment.getByRole("button", { name: "Löschen" }).click();
+const askedBeforeDelete = await page
+  .locator("text=Diesen Kommentar endgültig löschen?")
+  .first()
+  .isVisible();
+await ownComment.getByRole("button", { name: "Endgültig löschen" }).click();
+await page.waitForFunction(
+  (needle) => !document.body.innerText.includes(needle),
+  editedText.slice(0, 30),
+  { timeout: 15000 },
+);
+record(
+  "Eigener Kommentar nach Rückfrage gelöscht",
+  askedBeforeDelete && (await page.locator("article", { hasText: editedText }).count()) === 0,
+  askedBeforeDelete ? "Rückfrage erschien" : "ohne Rückfrage",
+);
+
+// Bleibt für den Superuser stehen: Er entfernt ihn später im Admin-Dashboard.
+const foreignCommentText = `Fremdkommentar der Prüfung ${new Date().toISOString()}`;
+const commentRecordingUrl = page.url();
+await page.fill("#kommentar", foreignCommentText);
+await page.click('button:has-text("Kommentar speichern")');
+await page.waitForSelector(`text=${foreignCommentText.slice(0, 30)}`, { timeout: 15000 });
 
 /* 10 – Löschmarkierung durch Mitarbeitende */
 await page.click('button:text-is("Zur Löschung markieren")');
@@ -910,6 +971,36 @@ if ((await retryButton.count()) > 0) {
   record("Transkription manuell erneut startbar", false, "keine Schaltfläche gefunden");
 }
 await shot("14b-admin-auftraege");
+
+/* 13d – Fremden Kommentar als Superuser entfernen */
+await visit(`/admin`);
+const commentSection = page.locator("section", {
+  has: page.locator('h2:has-text("Kommentare")'),
+});
+const foreignEntry = commentSection.locator("li", { hasText: foreignCommentText });
+if ((await foreignEntry.count()) === 0) {
+  record("Fremder Kommentar im Admin-Dashboard gelistet", false, "Eintrag nicht gefunden");
+} else {
+  record("Fremder Kommentar im Admin-Dashboard gelistet", true);
+  await foreignEntry.locator('button:has-text("Kommentar entfernen")').click();
+  const adminAsked = await commentSection
+    .locator("text=/Kommentar von .* entfernen\\?/")
+    .first()
+    .isVisible();
+  await foreignEntry.locator('button:text-is("Entfernen")').click();
+  const removed = await waitFor(async () => {
+    await visit(`/admin`);
+    return (await page.locator("li", { hasText: foreignCommentText }).count()) === 0;
+  });
+  await visit(commentRecordingUrl);
+  const goneOnDetail = (await page.locator("article", { hasText: foreignCommentText }).count()) === 0;
+  record(
+    "Superuser entfernt fremden Kommentar nach Rückfrage",
+    adminAsked && removed && goneOnDetail,
+    `Rückfrage ${adminAsked ? "erschien" : "fehlte"}, Detailseite ${goneOnDetail ? "bereinigt" : "zeigt ihn weiter"}`,
+  );
+  await shot("14c-admin-kommentare");
+}
 
 /* 14 – Endgültiges Löschen der Testaufnahmen */
 const TEST_NAMES = ["Ziegler", "Zimmermann", "Kunz"];
