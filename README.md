@@ -18,6 +18,10 @@ Verkaufsgespräche der Immotrust AG.
 - **Detailansicht**: WaveSurfer.js-Player (Wiedergabe, Scrubbing, Lautstärke, Tempo), synchron
   mitlaufendes Transkript, Sprung per Klick auf Wort oder Satz, Suche im Transkript, Kommentare und
   persönliche Bewertung von 1 bis 10.
+- **Tastaturbedienung der Detailansicht**: Im Transkript ist genau ein Satz eine Tabulator-Station;
+  Enter springt an den Satzanfang, der Mausklick auf ein Wort weiterhin an die Wortposition. Am
+  Anfang des Seiteninhalts stehen die Sprunglinks „Zum Transkript“ und „Zu den Metadaten und
+  Kommentaren“, die erst beim Fokussieren sichtbar werden.
 - **Löschungen**: Mitarbeitende setzen nur eine Löschmarkierung („Zur Löschung markieren“ /
   „Markierung bestätigen“). Zeilenstatus und Beschriftung wechseln sofort nach dem Klick, während
   des Speicherns erscheint ein Wartehinweis, danach eine kurze Bestätigung. Endgültig gelöscht wird
@@ -82,6 +86,7 @@ npm run build
 npm run start -- -p 3010
 
 ADMIN_PASSWORD=… node scripts/browser-check.mjs   # vollständiger Funktionsdurchlauf im echten Browser
+PRUEF_PASSWORT=… node scripts/check-tastatur.mjs  # Tabulator-Reihenfolge und Sprunglinks im Detail
 node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
 
@@ -98,6 +103,11 @@ dem vorhandenen Bestand ab, es setzt also keine bestimmten Aufnahmen voraus. Fü
 meldet es sich mit `ADMIN_EMAIL` (Vorgabe: der Superuser) und `ADMIN_PASSWORD` an; das Passwort
 liegt nicht im Repository. `cleanup-testdata.mts` entfernt anschliessend die dabei entstandenen
 Testkonten, Testaufnahmen, Kommentare und Bewertungen.
+
+`check-tastatur.mjs` prüft die Detailansicht allein mit der Tastatur: eine Tabulator-Station je Satz,
+Enter als Sprung an die Audioposition, Mausklick auf ein Wort als Sprung an die Wortposition sowie
+Sichtbarkeit und Ziel der beiden Sprunglinks. Es wählt dafür das längste vorhandene Transkript und
+meldet sich mit `PRUEF_EMAIL` (Vorgabe: ein Mitarbeitendenkonto) und `PRUEF_PASSWORT` an.
 
 Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.
 

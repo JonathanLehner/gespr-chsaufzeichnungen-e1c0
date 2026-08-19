@@ -304,7 +304,7 @@ for (const href of detailHrefs.slice(0, 6)) {
       rows.flatMap((row) => [...row.querySelectorAll(".badge")].map((badge) => badge.textContent.trim())),
     );
     const words = rows.flatMap((row) =>
-      [...row.querySelectorAll('span[role="button"]')].map((span) =>
+      [...row.querySelectorAll("span[data-wort]")].map((span) =>
         span.textContent.trim().replace(/[^A-Za-zÄÖÜäöüß-]/g, ""),
       ),
     );
@@ -516,7 +516,7 @@ record("Scrubbing über die Bedienelemente", scrubbed > 0, `${scrubbed.toFixed(1
 
 const sentences = page.locator('[id^="satz-"]');
 const sentence = sentences.nth(Math.min(4, (await sentences.count()) - 1));
-await sentence.locator("span[role='button']").first().click();
+await sentence.locator("span[data-wort]").first().click();
 await page.waitForTimeout(800);
 const seeked = await page.evaluate(() => document.querySelector("audio")?.currentTime ?? 0);
 record("Klick auf Wort springt im Audio", seeked > 0, `${seeked.toFixed(1)} s`);
@@ -555,6 +555,100 @@ const expectedTerms = [
 const missingTerms = expectedTerms.filter((term) => !metaTerms.includes(term));
 record("Alle Metadaten sowie Upload- und Transkriptionsstatus sichtbar", missingTerms.length === 0, missingTerms.join(", "));
 await shot("08-detail");
+
+/* 8d – Tastaturbedienung des Transkripts
+   Jedes Wort war früher eine eigene Tabulator-Station; die rechte Spalte lag
+   damit hinter tausenden Stationen. Geprüft wird, dass je Satz genau eine
+   Station bleibt und Enter den Satz anspringt. */
+const sentenceCount = await sentences.count();
+const wordCountInTranscript = await page.locator("[id^='satz-'] span[data-wort]").count();
+const transcriptStops = await page.evaluate(() => {
+  const list = document.querySelector('[id^="satz-"]')?.parentElement;
+  if (!list) return -1;
+  return list.querySelectorAll(
+    'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+  ).length;
+});
+record(
+  "Pro Satz nur eine Tabulator-Station im Transkript",
+  transcriptStops === sentenceCount && sentenceCount > 0,
+  `${transcriptStops} Stationen für ${sentenceCount} Sätze (${wordCountInTranscript} Wörter)`,
+);
+
+const stopsBeforeComments = await page.evaluate(() => {
+  const stops = [
+    ...document.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+    ),
+  ];
+  return stops.indexOf(document.getElementById("kommentar"));
+});
+record(
+  "Metadaten, Bewertung und Kommentare per Tastatur erreichbar",
+  stopsBeforeComments > 0 && stopsBeforeComments <= sentenceCount + 40,
+  `${stopsBeforeComments} Stationen bis zum Kommentarfeld statt über ${wordCountInTranscript} Wörter`,
+);
+
+await page.evaluate(() => {
+  const audio = document.querySelector("audio");
+  if (audio) {
+    audio.pause();
+    audio.currentTime = 0;
+  }
+});
+const focusedSentenceId = await page.evaluate((index) => {
+  const rows = [...document.querySelectorAll('[id^="satz-"]')];
+  const row = rows[Math.min(index, rows.length - 1)];
+  row?.focus();
+  return document.activeElement?.id ?? "";
+}, 6);
+await page.keyboard.press("Enter");
+await page.waitForTimeout(900);
+const keyboardSeek = await page.evaluate(() => document.querySelector("audio")?.currentTime ?? 0);
+record(
+  "Satz mit Enter anspringbar",
+  /^satz-\d+$/.test(focusedSentenceId) && keyboardSeek > 0,
+  `${focusedSentenceId || "kein Fokus"} → ${keyboardSeek.toFixed(1)} s`,
+);
+await page.evaluate(() => document.querySelector("audio")?.pause());
+
+/* 8e – Sprunglinks am Seitenanfang */
+await page.evaluate(() => window.scrollTo(0, 0));
+const skipTexts = await page.$$eval("a.skip-link", (nodes) =>
+  nodes.map((node) => node.textContent.trim()),
+);
+const skipHidden = await page.evaluate(
+  () => getComputedStyle(document.querySelector("a.skip-link")).opacity,
+);
+const skipShown = await page.evaluate(() => {
+  const link = document.querySelector("a.skip-link");
+  link.focus();
+  return getComputedStyle(link).opacity;
+});
+await page.waitForTimeout(250);
+record(
+  "Sprunglinks werden erst beim Fokussieren sichtbar",
+  skipTexts.length === 2 &&
+    skipTexts[0] === "Zum Transkript" &&
+    skipTexts[1] === "Zu den Metadaten und Kommentaren" &&
+    skipHidden === "0" &&
+    Number(skipShown) > 0.9,
+  `${skipTexts.join(" · ")} – Deckkraft ${skipHidden} → ${skipShown}`,
+);
+await shot("08d-sprunglinks");
+
+await page.keyboard.press("Enter");
+await page.waitForTimeout(600);
+const transcriptTarget = await page.evaluate(() => document.activeElement?.id ?? "");
+await page.evaluate(() => document.querySelectorAll("a.skip-link")[1]?.focus());
+await page.keyboard.press("Enter");
+await page.waitForTimeout(600);
+const metadataTarget = await page.evaluate(() => document.activeElement?.id ?? "");
+record(
+  "Sprunglinks führen zu Transkript sowie Metadaten und Kommentaren",
+  transcriptTarget === "transkript" && metadataTarget === "metadaten",
+  `${transcriptTarget || "–"} / ${metadataTarget || "–"}`,
+);
 
 await page.fill('input[aria-label="Im Transkript suchen"]', needle);
 await page.waitForTimeout(400);

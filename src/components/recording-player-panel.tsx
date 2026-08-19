@@ -39,22 +39,26 @@ export function RecordingPlayerPanel({
     <div className="space-y-4">
       <WaveformPlayer ref={playerRef} src={audioSrc} startMs={startMs} onTime={handleTime} />
 
-      {status === "abgeschlossen" && segments.length > 0 ? (
-        <TranscriptView
-          segments={segments}
-          currentMs={currentMs}
-          onSeek={handleSeek}
-          initialQuery={initialQuery}
-        />
-      ) : (
-        <TranscriptPlaceholder
-          recordingId={recordingId}
-          status={status}
-          errorMessage={errorMessage}
-          nextAttemptLabel={nextAttemptLabel}
-          lastAttemptAt={lastAttemptAt}
-        />
-      )}
+      {/* Ziel des Sprunglinks „Zum Transkript“ – auch dann vorhanden, wenn statt
+          des Transkripts noch der Verarbeitungszustand steht. */}
+      <div id="transkript" tabIndex={-1} className="scroll-mt-20">
+        {status === "abgeschlossen" && segments.length > 0 ? (
+          <TranscriptView
+            segments={segments}
+            currentMs={currentMs}
+            onSeek={handleSeek}
+            initialQuery={initialQuery}
+          />
+        ) : (
+          <TranscriptPlaceholder
+            recordingId={recordingId}
+            status={status}
+            errorMessage={errorMessage}
+            nextAttemptLabel={nextAttemptLabel}
+            lastAttemptAt={lastAttemptAt}
+          />
+        )}
+      </div>
     </div>
   );
 }

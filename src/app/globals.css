@@ -162,6 +162,41 @@
     white-space: nowrap;
   }
 
+  /* Sprunglink: bleibt für die Maus unsichtbar und erscheint erst, sobald er
+     per Tastatur den Fokus erhält. Er bleibt dabei durchgehend im
+     Bedienungsbaum, damit die Tabulator-Reihenfolge ihn erreicht. */
+  .skip-link {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+    border: 1px solid var(--color-petrol);
+    background: var(--color-surface);
+    padding: 0.35rem 0.7rem;
+    font-size: 0.78125rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--color-petrol);
+    box-shadow: 0 8px 20px rgba(16, 26, 36, 0.14);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-150%);
+    transition:
+      opacity 120ms ease,
+      transform 120ms ease;
+  }
+
+  .skip-link:focus {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skip-link {
+      transition: none;
+    }
+  }
+
   .notice {
     border-radius: 4px;
     border: 1px solid;

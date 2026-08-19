@@ -101,13 +101,26 @@ export default async function AufnahmeDetailPage({
 
   return (
     <div className="space-y-4">
-      <nav className="text-[12px] text-ink-faint">
-        <Link href="/aufnahmen" className="hover:text-petrol hover:underline">
-          Aufnahmen
-        </Link>
-        <span className="mx-1.5">/</span>
-        <span className="text-ink-soft">{recording.callerName}</span>
-      </nav>
+      {/* Sprunglinks: unsichtbar, bis sie den Fokus erhalten. Sie führen an den
+          langen Bereichen der Seite vorbei direkt ans Ziel. */}
+      <div className="relative">
+        <div className="pointer-events-none absolute left-0 top-0 z-40 flex flex-wrap gap-2">
+          <a href="#transkript" className="skip-link">
+            Zum Transkript
+          </a>
+          <a href="#metadaten" className="skip-link">
+            Zu den Metadaten und Kommentaren
+          </a>
+        </div>
+
+        <nav className="text-[12px] text-ink-faint">
+          <Link href="/aufnahmen" className="hover:text-petrol hover:underline">
+            Aufnahmen
+          </Link>
+          <span className="mx-1.5">/</span>
+          <span className="text-ink-soft">{recording.callerName}</span>
+        </nav>
+      </div>
 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -156,7 +169,7 @@ export default async function AufnahmeDetailPage({
           initialQuery={initialQuery}
         />
 
-        <div className="space-y-4">
+        <div id="metadaten" tabIndex={-1} className="space-y-4 scroll-mt-20">
           <section className="card p-4">
             <h2 className="text-[14px] font-semibold text-ink">Metadaten</h2>
             <dl className="mt-3 space-y-1.5">

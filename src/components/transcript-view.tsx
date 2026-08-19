@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { TranscriptSegment } from "@/lib/types";
 
 export type FlatSentence = {
@@ -57,9 +57,20 @@ type RowProps = {
   matchState: "keiner" | "treffer" | "aktuell";
   query: string;
   tone: string;
+  hintId: string;
   onSeek: (ms: number) => void;
 };
 
+/**
+ * Ein Satz ist genau eine Tabulator-Station.
+ *
+ * Früher war jedes Wort fokussierbar; ein zwanzigminütiges Gespräch ergab damit
+ * mehrere tausend Stationen, und die rechte Spalte mit Metadaten, Bewertung und
+ * Kommentaren war per Tastatur praktisch unerreichbar. Deshalb ist nur noch die
+ * Satzzeile selbst fokussierbar (Enter springt an den Satzanfang), während die
+ * Wörter reine Schaltflächen für die Maus bleiben und weiterhin an die
+ * Wortposition springen.
+ */
 const SentenceRow = memo(function SentenceRow({
   sentence,
   active,
@@ -67,24 +78,28 @@ const SentenceRow = memo(function SentenceRow({
   matchState,
   query,
   tone,
+  hintId,
   onSeek,
 }: RowProps) {
   return (
-    <div
+    <button
+      type="button"
       id={`satz-${sentence.index}`}
-      className={`group flex gap-3 rounded-[4px] px-2 py-1.5 transition-colors ${
+      aria-describedby={hintId}
+      onClick={() => onSeek(sentence.startMs)}
+      // select-text hält das Transkript kopierbar; Schaltflächen unterbinden
+      // die Textauswahl sonst je nach Browser.
+      className={`group flex w-full select-text gap-3 rounded-[4px] px-2 py-1.5 text-left transition-colors ${
         active ? "bg-petrol-soft" : matchState === "aktuell" ? "bg-[#fdeaa8]/60" : "hover:bg-canvas"
       }`}
     >
-      <button
-        type="button"
-        onClick={() => onSeek(sentence.startMs)}
-        className="mt-0.5 shrink-0 font-mono text-[11px] tabular-nums text-ink-faint hover:text-petrol"
+      <span
+        className="mt-0.5 shrink-0 font-mono text-[11px] tabular-nums text-ink-faint group-hover:text-petrol"
         title="An diese Stelle springen"
       >
         {timecode(sentence.startMs)}
-      </button>
-      <p className="flex-1 text-[13.5px] leading-relaxed">
+      </span>
+      <span className="flex-1 text-[13.5px] leading-relaxed">
         {sentence.newSpeaker && (
           <span className={`badge mr-2 align-baseline ${tone}`}>{sentence.speakerLabel}</span>
         )}
@@ -95,14 +110,12 @@ const SentenceRow = memo(function SentenceRow({
           return (
             <span
               key={wordIndex}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSeek(word.startMs)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSeek(word.startMs);
-                }
+              data-wort=""
+              // Der Klick auf ein Wort springt an die Wortposition und darf
+              // deshalb nicht zusätzlich den Satzanfang der Zeile auslösen.
+              onClick={(event) => {
+                event.stopPropagation();
+                onSeek(word.startMs);
               }}
               className={`cursor-pointer rounded-[2px] ${
                 isActiveWord ? "bg-petrol text-white" : isMatch ? "bg-[#fdeaa8]" : "hover:bg-line"
@@ -113,8 +126,8 @@ const SentenceRow = memo(function SentenceRow({
             </span>
           );
         })}
-      </p>
-    </div>
+      </span>
+    </button>
   );
 });
 
@@ -144,6 +157,7 @@ export function TranscriptView({
   const [matchPosition, setMatchPosition] = useState(0);
   const [follow, setFollow] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
+  const hintId = useId();
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -268,10 +282,15 @@ export function TranscriptView({
           </label>
         </div>
       </div>
+      <p id={hintId} className="sr-only">
+        Enter spielt die Aufnahme ab dem Anfang dieses Satzes ab. Ein Mausklick auf ein einzelnes
+        Wort springt an die Position dieses Wortes.
+      </p>
       <div ref={containerRef} className="max-h-[560px] min-h-[320px] overflow-y-auto p-2">
         {sentences.map((sentence) => (
           <SentenceRow
             key={sentence.index}
+            hintId={hintId}
             sentence={sentence}
             active={sentence.index === activeIndex}
             activeWord={sentence.index === activeIndex ? activeWord : -1}
