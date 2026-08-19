@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { WaveformPlayer, type PlayerHandle } from "@/components/waveform-player";
 import { TranscriptView } from "@/components/transcript-view";
 import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
+import { formatDuration } from "@/lib/time";
 import { describeTranscriptionError, retryHint } from "@/lib/transcription-errors";
 import type { TranscriptSegment, TranscriptionStatus } from "@/lib/types";
 
@@ -15,6 +16,7 @@ export function RecordingPlayerPanel({
   errorMessage,
   nextAttemptLabel,
   lastAttemptAt,
+  gaps,
   startMs,
   initialQuery,
 }: {
@@ -26,6 +28,8 @@ export function RecordingPlayerPanel({
   nextAttemptLabel: string | null;
   /** Zeitpunkt des letzten Versuchs – setzt die Schaltfläche nach einem neuen Fehlschlag zurück. */
   lastAttemptAt: string | null;
+  /** Zeitbereiche ohne Text, weil der Dienst den Abschnitt nicht beantwortet hat. */
+  gaps: { startMs: number; endMs: number }[];
   startMs: number;
   initialQuery: string;
 }) {
@@ -41,14 +45,23 @@ export function RecordingPlayerPanel({
 
       {/* Ziel des Sprunglinks „Zum Transkript“ – auch dann vorhanden, wenn statt
           des Transkripts noch der Verarbeitungszustand steht. */}
-      <div id="transkript" tabIndex={-1} className="scroll-mt-20">
+      <div id="transkript" tabIndex={-1} className="scroll-mt-20 space-y-3">
         {status === "abgeschlossen" && segments.length > 0 ? (
-          <TranscriptView
-            segments={segments}
-            currentMs={currentMs}
-            onSeek={handleSeek}
-            initialQuery={initialQuery}
-          />
+          <>
+            {gaps.length > 0 && (
+              <TranscriptGapNotice
+                gaps={gaps}
+                recordingId={recordingId}
+                lastAttemptAt={lastAttemptAt}
+              />
+            )}
+            <TranscriptView
+              segments={segments}
+              currentMs={currentMs}
+              onSeek={handleSeek}
+              initialQuery={initialQuery}
+            />
+          </>
         ) : (
           <TranscriptPlaceholder
             recordingId={recordingId}
@@ -60,6 +73,39 @@ export function RecordingPlayerPanel({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Weist auf Abschnitte hin, für die kein Text vorliegt. Ohne diesen Hinweis
+ * sähe ein lückenhaftes Transkript wie ein vollständiges aus – die fehlende
+ * Passage wäre nur daran zu erkennen, dass sie nicht da ist.
+ */
+function TranscriptGapNotice({
+  gaps,
+  recordingId,
+  lastAttemptAt,
+}: {
+  gaps: { startMs: number; endMs: number }[];
+  recordingId: string;
+  lastAttemptAt: string | null;
+}) {
+  return (
+    <section className="card border-[#e6d3a5] bg-warn-soft p-4" role="status">
+      <h2 className="text-[13.5px] font-semibold text-warn">Das Transkript ist lückenhaft</h2>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-warn">
+        Für {gaps.length === 1 ? "einen Abschnitt" : `${gaps.length} Abschnitte`} der Aufnahme hat
+        der Transkriptionsdienst auch nach mehreren Anläufen nichts geliefert. Der übrige Text ist
+        vollständig; es fehlt{" "}
+        {gaps
+          .map((gap) => `${formatDuration(gap.startMs)}–${formatDuration(gap.endMs)}`)
+          .join(", ")}
+        . Diese Stellen lassen sich in der Aufnahme anhören.
+      </p>
+      <div className="mt-3">
+        <RetryTranscriptionButton key={lastAttemptAt ?? "neu"} recordingId={recordingId} />
+      </div>
+    </section>
   );
 }
 
@@ -76,6 +122,29 @@ function TranscriptPlaceholder({
   nextAttemptLabel: string | null;
   lastAttemptAt: string | null;
 }) {
+  if (status === "ohne_sprache") {
+    return (
+      <section className="card p-5" role="status">
+        <h2 className="text-[14px] font-semibold text-ink">Kein Gespräch auf der Aufnahme</h2>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-ink-soft">
+          Die Aufnahme wurde vollständig ausgewertet. Sie enthält nichts Gesprochenes – etwa nur
+          Freizeichen, Besetztton oder Stille, weil das Gespräch nicht zustande gekommen ist.
+          Deshalb liegt kein Transkript vor. Die Audiodatei lässt sich weiterhin abspielen.
+        </p>
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-faint">
+          Ist doch etwas zu hören, lässt sich die Auswertung neu starten.
+        </p>
+        <div className="mt-3">
+          <RetryTranscriptionButton
+            key={lastAttemptAt ?? "neu"}
+            recordingId={recordingId}
+            variant="voll"
+          />
+        </div>
+      </section>
+    );
+  }
+
   if (status === "fehlgeschlagen") {
     const failure = describeTranscriptionError(errorMessage);
     return (

@@ -406,11 +406,12 @@ export async function listJobs(): Promise<Job[]> {
 }
 
 export async function countByStatus(): Promise<Record<TranscriptionStatus, number>> {
-  const [wartend, inArbeit, abgeschlossen, fehlgeschlagen] = await Promise.all([
+  const [wartend, inArbeit, abgeschlossen, ohneSprache, fehlgeschlagen] = await Promise.all([
     countDocuments(Collections.recordings, { transcriptionStatus: "wartend" }),
     countDocuments(Collections.recordings, { transcriptionStatus: "in_arbeit" }),
     countDocuments(Collections.recordings, { transcriptionStatus: "abgeschlossen" }),
+    countDocuments(Collections.recordings, { transcriptionStatus: "ohne_sprache" }),
     countDocuments(Collections.recordings, { transcriptionStatus: "fehlgeschlagen" }),
   ]);
-  return { wartend, in_arbeit: inArbeit, abgeschlossen, fehlgeschlagen };
+  return { wartend, in_arbeit: inArbeit, abgeschlossen, ohne_sprache: ohneSprache, fehlgeschlagen };
 }

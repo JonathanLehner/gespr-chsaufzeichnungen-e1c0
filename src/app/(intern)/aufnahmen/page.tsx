@@ -215,6 +215,11 @@ export default async function AufnahmenPage({
                             {describeTranscriptionError(row.transcriptionError).message}
                           </span>
                         )}
+                        {row.transcriptionStatus === "ohne_sprache" && (
+                          <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
+                            Ausgewertet, aber nichts Gesprochenes zu hören.
+                          </span>
+                        )}
                       </span>
                     </td>
                     {/* Badge und Schaltfläche teilen sich den Zustand, damit die Zeile

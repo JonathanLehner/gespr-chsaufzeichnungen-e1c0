@@ -19,7 +19,7 @@ const features = [
   },
   {
     title: "Automatische Transkription",
-    text: "Jede Aufnahme wird nach dem Upload auf Deutsch transkribiert – mit Sprechertrennung sowie Zeitstempeln auf Satz- und Wortebene.",
+    text: "Jede Aufnahme wird nach dem Upload auf Deutsch transkribiert – mit Sprechertrennung und einem Zeitstempel für jeden Satz. Lange Gespräche werden dafür abschnittsweise verarbeitet.",
   },
   {
     title: "Waveform-Wiedergabe",

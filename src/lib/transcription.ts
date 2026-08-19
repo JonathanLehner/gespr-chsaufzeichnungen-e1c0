@@ -8,7 +8,13 @@ import {
   updateOne,
   upsertById,
 } from "./db";
-import { platformGemini } from "./platform";
+import { measureDurationMs, splitAudio, type AudioChunk } from "./audio-split";
+import {
+  platformFetchBytes,
+  platformGemini,
+  platformUploadAudio,
+  type GeminiPart,
+} from "./platform";
 import { invalidateRecordingCache } from "./recordings";
 import type {
   Job,
@@ -24,6 +30,39 @@ const MODEL = "gemini-2.5-flash";
 export const MAX_ATTEMPTS = 3;
 const STALE_LOCK_MS = 10 * 60 * 1000;
 const MAX_PART_BYTES = 350 * 1024; // Grenze des Datenbank-Endpunkts ist 1 MB
+
+/**
+ * Zerlegung langer Aufnahmen.
+ *
+ * Am Dienst gemessen: Die Antwortzeit hängt vor allem an der Menge des
+ * erzeugten JSON, und die wächst mit der Gesprächslänge. Ein zehnminütiges
+ * Gespräch in einer Anfrage läuft in die Zeitüberschreitung des vorgelagerten
+ * Gateways – bei jedem Versuch gleich. Eine Wiederholung mit derselben Datei
+ * hilft deshalb nicht.
+ *
+ * Ab `DIRECT_LIMIT_MS` wird darum in Abschnitte von `CHUNK_TARGET_MS` geteilt.
+ * Jede einzelne Anfrage bleibt dadurch kurz (gemessen 16–31 s je Abschnitt),
+ * unabhängig davon, wie lang das Gespräch ist. Zwei Abschnitte laufen
+ * gleichzeitig; bei mehr geraten die Anfragen einander in die Quere und
+ * einzelne blieben in der Messung hängen.
+ *
+ * Die Abschnitte werden vorher abgelegt und über `fileData` referenziert: Der
+ * Gemini-Endpunkt nimmt höchstens 200 KB Anfragekörper entgegen, Audiodaten
+ * passen also nicht als `inlineData` hinein.
+ */
+const DIRECT_LIMIT_MS = 2 * 60 * 1000;
+const CHUNK_TARGET_MS = 60 * 1000;
+const CHUNK_CONCURRENCY = 2;
+/** Eigene Frist je Anfrage, damit ein hängender Aufruf berechenbar abbricht. */
+const GEMINI_TIMEOUT_MS = 120 * 1000;
+const TRANSFER_TIMEOUT_MS = 60 * 1000;
+/**
+ * Der Dienst bleibt gelegentlich bei einer einzelnen Anfrage hängen, während
+ * die übrigen Anfragen desselben Laufs in 20 bis 45 Sekunden antworten. Ein
+ * Abschnitt wird deshalb bis zu dreimal angefragt.
+ */
+const CHUNK_ATTEMPTS = 3;
+const CHUNK_RETRY_PAUSE_MS = 2000;
 
 /**
  * Wartezeit bis zur nächsten automatischen Wiederholung, gemessen an der Zahl
@@ -42,15 +81,36 @@ Regeln:
 - Ausgabesprache ist immer Deutsch, unabhängig von Dialekt oder Akzent. Schweizerdeutsche Passagen werden in deutscher Standardsprache wiedergegeben.
 - Trenne die Sprecher. Vergib stabile Kennungen S1, S2, S3 in der Reihenfolge des ersten Auftretens.
 - Wenn im Gespräch ein Name genannt wird, verwende ihn als Bezeichnung des Sprechers, sonst "Sprecher 1", "Sprecher 2".
-- Gliedere jeden Sprecherbeitrag in einzelne Sätze und jeden Satz in einzelne Wörter.
+- Gliedere jeden Sprecherbeitrag in einzelne Sätze.
 - Alle Zeitangaben in ganzen Millisekunden ab Beginn der Aufnahme, aufsteigend und ohne Überlappung.
 - Erfinde nichts. Unverständliche Stellen als [unverständlich] kennzeichnen.
 
 Antworte ausschliesslich mit JSON in genau dieser Struktur:
 {"speakers":[{"id":"S1","label":"Samir Weber"}],
  "segments":[{"speaker":"S1","startMs":0,"endMs":4200,
-   "sentences":[{"text":"Guten Tag Frau Bachmann.","startMs":0,"endMs":1600,
-     "words":[{"text":"Guten","startMs":0,"endMs":320}]}]}]}`;
+   "sentences":[{"text":"Guten Tag Frau Bachmann.","startMs":0,"endMs":1600}]}]}
+
+Ist auf der Aufnahme nichts Gesprochenes zu hören – etwa nur Freizeichen, Besetztton, Rauschen oder Stille –, dann antworte mit {"speakers":[],"segments":[]}. Erfinde in diesem Fall keinen Text.`;
+
+/**
+ * Zusatz für einen einzelnen Abschnitt. Der Dienst hört nur diesen Ausschnitt
+ * und kennt weder das Gespräch davor noch danach; die Zeitangaben zählen
+ * deshalb ab Beginn des Abschnitts und werden erst beim Zusammensetzen auf die
+ * Gesprächszeit verschoben.
+ *
+ * Der Name aus den Metadaten wird bewusst nicht mitgegeben: In der Messung hat
+ * das Modell ihn als Sprecherbezeichnung übernommen, auch wenn er im Abschnitt
+ * gar nicht fiel. Namen sollen aus dem Gehörten stammen, nicht aus dem
+ * Dateinamen.
+ */
+function chunkPrompt(index: number, count: number): string {
+  return `${PROMPT}
+
+Diese Audiodatei ist Abschnitt ${index + 1} von ${count} eines längeren Gesprächs.
+- Alle Zeitangaben zählen ab dem Beginn dieses Abschnitts, nicht ab dem Beginn des Gesprächs.
+- Der Abschnitt kann mitten in einem Satz beginnen und enden. Gib angefangene Sätze so wieder, wie sie zu hören sind, und ergänze nichts.
+- Verwende für dieselbe Person durchgehend dieselbe Bezeichnung.`;
+}
 
 type RawWord = { text?: string; startMs?: number; endMs?: number };
 type RawSentence = { text?: string; startMs?: number; endMs?: number; words?: RawWord[] };
@@ -79,13 +139,21 @@ function toMs(value: unknown, fallback: number): number {
   return Math.round(numeric);
 }
 
-/** Bringt die Modellantwort in eine lückenlose, aufsteigende Struktur. */
-export function normalizeTranscript(raw: RawTranscript): {
+export type NormalizedTranscript = {
   segments: TranscriptSegment[];
   speakerLabels: string[];
   wordCount: number;
   endMs: number;
-} {
+};
+
+/**
+ * Bringt die Modellantwort in eine lückenlose, aufsteigende Struktur.
+ *
+ * Ein leeres Ergebnis ist gültig und kein Fehler: Es bedeutet, dass auf der
+ * Aufnahme nichts Gesprochenes zu hören war. Wie damit umzugehen ist,
+ * entscheidet der Aufrufer.
+ */
+export function normalizeTranscript(raw: RawTranscript): NormalizedTranscript {
   const labels = new Map<string, string>();
   (raw.speakers ?? []).forEach((speaker, index) => {
     const id = (speaker.id ?? `S${index + 1}`).trim();
@@ -121,6 +189,12 @@ export function normalizeTranscript(raw: RawTranscript): {
           return { text: (word.text ?? "").trim(), startMs: wordStart, endMs: wordEnd };
         });
       } else {
+        // Der Prompt verlangt keine Wortzeiten mehr – sie zu erzeugen kostete
+        // den Dienst ein Vielfaches der Antwortzeit und war die Ursache der
+        // Zeitüberschreitungen. Innerhalb des gemessenen Satzes werden die
+        // Wörter deshalb gleichmässig verteilt. Das Mitlaufen im Transkript
+        // bleibt dadurch erhalten; genau sind die Satzgrenzen, nicht die
+        // einzelnen Wortgrenzen.
         const tokens = text.split(/\s+/).filter(Boolean);
         const step = (endMs - startMs) / Math.max(tokens.length, 1);
         words = tokens.map((token, index) => ({
@@ -145,16 +219,71 @@ export function normalizeTranscript(raw: RawTranscript): {
     });
   }
 
-  if (segments.length === 0) {
-    throw new Error("Der Transkriptionsdienst hat keinen verwertbaren Text geliefert.");
-  }
-
   const usedSpeakers = new Set(segments.map((segment) => segment.speaker));
   return {
     segments,
     speakerLabels: [...usedSpeakers].map((id) => labels.get(id) ?? id),
     wordCount,
-    endMs: segments[segments.length - 1].endMs,
+    endMs: segments.length > 0 ? segments[segments.length - 1].endMs : 0,
+  };
+}
+
+/** Verschiebt einen Abschnitt auf seine Position im Gesamtgespräch. */
+function shiftSegments(segments: TranscriptSegment[], offsetMs: number): TranscriptSegment[] {
+  if (offsetMs === 0) return segments;
+  return segments.map((segment) => ({
+    ...segment,
+    startMs: segment.startMs + offsetMs,
+    endMs: segment.endMs + offsetMs,
+    sentences: segment.sentences.map((sentence) => ({
+      ...sentence,
+      startMs: sentence.startMs + offsetMs,
+      endMs: sentence.endMs + offsetMs,
+      words: sentence.words.map((word) => ({
+        ...word,
+        startMs: word.startMs + offsetMs,
+        endMs: word.endMs + offsetMs,
+      })),
+    })),
+  }));
+}
+
+/**
+ * Setzt die Abschnitte zu einem Transkript zusammen.
+ *
+ * Die Sprecherkennungen S1, S2 … vergibt der Dienst je Abschnitt neu. Zusammen
+ * gehören deshalb jene Beiträge, die dieselbe Bezeichnung tragen – der Prompt
+ * verlangt für dieselbe Person in jedem Abschnitt dieselbe Bezeichnung. Nennt
+ * ein Abschnitt einen Namen und der nächste nicht, bleiben beide als eigene
+ * Sprecher stehen; das ist ohne abschnittsübergreifenden Höreindruck nicht
+ * auflösbar und im Transkript sichtbar, statt still falsch zusammengeführt.
+ */
+function mergeChunks(parts: NormalizedTranscript[]): NormalizedTranscript {
+  const ids = new Map<string, string>();
+  const segments: TranscriptSegment[] = [];
+  let wordCount = 0;
+
+  for (const part of parts) {
+    for (const segment of part.segments) {
+      const key = segment.speakerLabel.trim().toLowerCase();
+      let id = ids.get(key);
+      if (!id) {
+        id = `S${ids.size + 1}`;
+        ids.set(key, id);
+      }
+      segments.push({ ...segment, speaker: id });
+    }
+    wordCount += part.wordCount;
+  }
+
+  segments.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  const speakerLabels = [...new Set(segments.map((segment) => segment.speakerLabel))];
+
+  return {
+    segments,
+    speakerLabels,
+    wordCount,
+    endMs: segments.length > 0 ? segments[segments.length - 1].endMs : 0,
   };
 }
 
@@ -265,7 +394,8 @@ async function setStatus(
   extras: StatusExtras = {},
 ): Promise<void> {
   const now = new Date().toISOString();
-  const closed = status === "abgeschlossen" || status === "fehlgeschlagen";
+  const closed =
+    status === "abgeschlossen" || status === "ohne_sprache" || status === "fehlgeschlagen";
   const nextAttemptAt = extras.nextAttemptAt ?? null;
 
   const jobFields: Record<string, unknown> = {
@@ -308,6 +438,136 @@ function retryIsDue(job: Job, now: string): boolean {
   return !job.nextAttemptAt || job.nextAttemptAt <= now;
 }
 
+/* ------------------------------------------------------------ Ausführung */
+
+/** Eine Anfrage an den Dienst, mit eigener Frist und ausgewertetem JSON. */
+async function requestTranscript(prompt: string, audio: GeminiPart): Promise<NormalizedTranscript> {
+  const response = await platformGemini(
+    {
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }, audio] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0 },
+    },
+    { timeoutMs: GEMINI_TIMEOUT_MS },
+  );
+  return normalizeTranscript(parseJsonLoosely(response.text ?? ""));
+}
+
+export type TranscriptGap = { startMs: number; endMs: number };
+
+/**
+ * Transkribiert die Abschnitte einer Aufnahme. Es laufen höchstens
+ * `CHUNK_CONCURRENCY` Abschnitte gleichzeitig – so bleibt die Zahl offener
+ * Anfragen an den Dienst begrenzt und es liegen nie mehr als zwei
+ * Abschnittskopien gleichzeitig im Speicher.
+ *
+ * Bleibt ein Abschnitt auch nach `CHUNK_ATTEMPTS` Anläufen ohne Antwort, kostet
+ * das nur diesen Abschnitt: Sein Zeitbereich wird als Lücke gemeldet, der Rest
+ * des Gesprächs steht als Transkript zur Verfügung. Genau darin liegt der
+ * zweite Gewinn der Zerlegung – vorher fiel bei jedem Aussetzer das ganze
+ * Transkript aus.
+ */
+async function transcribeChunks(
+  recording: Recording,
+  chunks: AudioChunk[],
+): Promise<NormalizedTranscript & { gaps: TranscriptGap[] }> {
+  const parts = new Array<NormalizedTranscript | null>(chunks.length).fill(null);
+  const gaps: TranscriptGap[] = [];
+  let next = 0;
+
+  const worker = async (): Promise<void> => {
+    for (let index = next++; index < chunks.length; index = next++) {
+      const chunk = chunks[index];
+      const prompt = chunkPrompt(index, chunks.length);
+      const label = `${recording._id} Abschnitt ${index + 1}/${chunks.length}`;
+
+      for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt += 1) {
+        const started = Date.now();
+        try {
+          // Jeder Anlauf legt den Abschnitt neu ab und fragt unter der neuen
+          // Adresse an. Eine Wiederholung mit unverändertem Verweis lief in der
+          // Messung dreimal in dieselbe Zeitüberschreitung, ein neuer Verweis
+          // dagegen durch – das Ablegen kostet dabei nur rund eine Sekunde.
+          const uploaded = await platformUploadAudio(chunk.toBytes(), {
+            timeoutMs: TRANSFER_TIMEOUT_MS,
+          });
+          const audio: GeminiPart = {
+            fileData: { fileUri: uploaded.url, mimeType: recording.mimeType },
+          };
+          const part = await requestTranscript(prompt, audio);
+          parts[index] = { ...part, segments: shiftSegments(part.segments, chunk.startMs) };
+          break;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[transkription] ${label}: Anlauf ${attempt} nach ${Date.now() - started} ms ` +
+              `fehlgeschlagen – ${message}`,
+          );
+          if (attempt === CHUNK_ATTEMPTS) {
+            gaps.push({ startMs: chunk.startMs, endMs: chunk.endMs });
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, CHUNK_RETRY_PAUSE_MS));
+          }
+        }
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, () => worker()),
+  );
+
+  const done = parts.filter((part): part is NormalizedTranscript => part !== null);
+  if (done.length === 0) {
+    throw new Error("Der Transkriptionsdienst hat auf keinen Abschnitt der Aufnahme geantwortet.");
+  }
+  gaps.sort((a, b) => a.startMs - b.startMs);
+  return { ...mergeChunks(done), gaps };
+}
+
+type RunResult = NormalizedTranscript & {
+  chunkCount: number;
+  measuredDurationMs: number | null;
+  gaps: TranscriptGap[];
+};
+
+/**
+ * Wählt den Weg zum Transkript. Kurze Aufnahmen gehen unverändert als eine
+ * Anfrage an den Dienst; erst für längere lohnt es sich, die Datei zu holen und
+ * zu zerlegen. Lässt sich das Format nicht verlustfrei schneiden, bleibt es
+ * beim einen Aufruf – das Ergebnis ist dann dasselbe wie bisher.
+ */
+async function runTranscription(recording: Recording): Promise<RunResult> {
+  const whole = async (measuredDurationMs: number | null): Promise<RunResult> => ({
+    ...(await requestTranscript(PROMPT, {
+      fileData: { fileUri: recording.audioUrl, mimeType: recording.mimeType },
+    })),
+    chunkCount: 1,
+    measuredDurationMs,
+    gaps: [],
+  });
+
+  if (recording.durationMs !== null && recording.durationMs <= DIRECT_LIMIT_MS) {
+    return whole(null);
+  }
+
+  const bytes = await platformFetchBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
+  const measuredDurationMs = measureDurationMs(bytes, recording.mimeType);
+  const durationMs = measuredDurationMs ?? recording.durationMs;
+  if (durationMs !== null && durationMs <= DIRECT_LIMIT_MS) {
+    return whole(measuredDurationMs);
+  }
+
+  const chunks = splitAudio(bytes, recording.mimeType, CHUNK_TARGET_MS);
+  if (!chunks || chunks.length < 2) return whole(measuredDurationMs);
+
+  return {
+    ...(await transcribeChunks(recording, chunks)),
+    chunkCount: chunks.length,
+    measuredDurationMs,
+  };
+}
+
 /**
  * Führt die Transkription einer Aufnahme aus. Der Auftrag wird vorher
  * gesperrt, damit parallele Aufrufe keine doppelten Läufe erzeugen.
@@ -319,7 +579,7 @@ export async function transcribeRecording(recordingId: string): Promise<
   if (!recording) return { ok: false, error: "Aufnahme nicht gefunden." };
 
   const job = await findById<Job>(Collections.jobs, recordingId);
-  if (job && job.status === "abgeschlossen") return { ok: true };
+  if (job && (job.status === "abgeschlossen" || job.status === "ohne_sprache")) return { ok: true };
   if (job && job.status === "fehlgeschlagen" && !retryIsDue(job, new Date().toISOString())) {
     return {
       ok: false,
@@ -338,33 +598,33 @@ export async function transcribeRecording(recordingId: string): Promise<
   await setStatus(recordingId, "in_arbeit", { attempts });
 
   try {
-    const response = await platformGemini({
-      model: MODEL,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: PROMPT },
-            { fileData: { fileUri: recording.audioUrl, mimeType: recording.mimeType } },
-          ],
-        },
-      ],
-      generationConfig: { responseMimeType: "application/json", temperature: 0 },
-    });
-    const normalized = normalizeTranscript(parseJsonLoosely(response.text ?? ""));
-    await saveTranscript(recordingId, normalized.segments, normalized.speakerLabels);
+    const result = await runTranscription(recording);
+    // Auch das leere Ergebnis wird geschrieben: Es räumt ein früheres Transkript
+    // ab und hält den Suchindex mit dem Datensatz im Einklang.
+    await saveTranscript(recordingId, result.segments, result.speakerLabels);
+
+    const duration = result.measuredDurationMs ?? recording.durationMs ?? result.endMs;
     await updateOne(
       Collections.recordings,
       { _id: recordingId },
       {
         $set: {
-          speakerCount: normalized.speakerLabels.length,
-          wordCount: normalized.wordCount,
-          ...(recording.durationMs ? {} : { durationMs: normalized.endMs }),
+          speakerCount: result.speakerLabels.length,
+          wordCount: result.wordCount,
+          transcriptionChunks: result.chunkCount,
+          transcriptionGaps: result.gaps.length > 0 ? result.gaps : null,
+          ...(duration > 0 ? { durationMs: duration } : {}),
         },
       },
     );
-    await setStatus(recordingId, "abgeschlossen", { lastError: null, attempts });
+
+    // Ein leeres Transkript heisst: Der Dienst hat die Aufnahme gehört und
+    // nichts Gesprochenes gefunden. Das ist ein Abschluss, kein Fehlschlag –
+    // eine Wiederholung käme zum selben Ergebnis.
+    await setStatus(recordingId, result.segments.length === 0 ? "ohne_sprache" : "abgeschlossen", {
+      lastError: null,
+      attempts,
+    });
     return { ok: true };
   } catch (error) {
     const message =
@@ -450,6 +710,7 @@ export async function resetJob(recordingId: string): Promise<void> {
         transcriptionAttempts: 0,
         transcriptionFinishedAt: null,
         transcriptionNextAttemptAt: null,
+        transcriptionGaps: null,
       },
     },
   );
@@ -482,7 +743,10 @@ export async function requeueTranscription(
   if (job && job.status === "wartend") {
     return { ok: true, message: "Der Auftrag steht bereits in der Warteschlange.", state: "laeuft" };
   }
-  if (job && job.status === "abgeschlossen" && !options.allowCompleted) {
+  // Ein lückenhaftes Transkript darf jederzeit neu erstellt werden: Der zweite
+  // Anlauf kann die fehlenden Abschnitte liefern.
+  const incomplete = (recording.transcriptionGaps?.length ?? 0) > 0;
+  if (job && job.status === "abgeschlossen" && !options.allowCompleted && !incomplete) {
     return {
       ok: false,
       message: "Für diese Aufnahme liegt bereits ein Transkript vor.",

@@ -82,6 +82,7 @@ export function RecordingsFilter({
             <option value="wartend">Wartend</option>
             <option value="in_arbeit">In Verarbeitung</option>
             <option value="abgeschlossen">Abgeschlossen</option>
+            <option value="ohne_sprache">Keine Sprache</option>
             <option value="fehlgeschlagen">Fehlgeschlagen</option>
           </select>
         </div>

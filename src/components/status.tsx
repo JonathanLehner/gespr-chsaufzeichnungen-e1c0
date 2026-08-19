@@ -4,6 +4,8 @@ const STATUS_STYLE: Record<TranscriptionStatus, { label: string; className: stri
   wartend: { label: "Wartend", className: "bg-warn-soft text-warn" },
   in_arbeit: { label: "In Verarbeitung", className: "bg-busy-soft text-busy" },
   abgeschlossen: { label: "Abgeschlossen", className: "bg-ok-soft text-ok" },
+  // Kein Fehler, aber auch kein Transkript: gedeckter Ton statt Rot oder Grün.
+  ohne_sprache: { label: "Keine Sprache", className: "bg-canvas text-ink-soft" },
   fehlgeschlagen: { label: "Fehlgeschlagen", className: "bg-bad-soft text-bad" },
 };
 

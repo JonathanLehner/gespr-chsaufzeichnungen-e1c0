@@ -18,7 +18,12 @@ import {
   RetryButton,
   RunQueueButton,
 } from "@/components/admin-controls";
-import type { MailDeliveryStatus, MailOutboxEntry, User } from "@/lib/types";
+import type {
+  MailDeliveryStatus,
+  MailOutboxEntry,
+  TranscriptionStatus,
+  User,
+} from "@/lib/types";
 
 export const metadata: Metadata = { title: "Admin-Dashboard" };
 
@@ -73,7 +78,7 @@ export default async function AdminPage() {
   const running = jobs.filter((job) => job.status === "in_arbeit" || job.status === "wartend");
   const failed = jobs.filter((job) => job.status === "fehlgeschlagen");
   const finished = jobs
-    .filter((job) => job.status === "abgeschlossen")
+    .filter((job) => job.status === "abgeschlossen" || job.status === "ohne_sprache")
     .sort((a, b) => (b.finishedAt ?? "").localeCompare(a.finishedAt ?? ""))
     .slice(0, 10);
 
@@ -90,6 +95,7 @@ export default async function AdminPage() {
     { label: "Transkription abgeschlossen", value: statusCounts.abgeschlossen },
     { label: "Wartend", value: statusCounts.wartend },
     { label: "In Verarbeitung", value: statusCounts.in_arbeit },
+    { label: "Keine Sprache", value: statusCounts.ohne_sprache },
     { label: "Fehlgeschlagen", value: statusCounts.fehlgeschlagen },
     { label: "Zur Löschung markiert", value: flagged.total },
     { label: "Kommentare", value: commentCount },
@@ -426,7 +432,7 @@ function DeliveryBadge({ status }: { status: MailDeliveryStatus | undefined }) {
 type JobRow = {
   id: string;
   filename: string;
-  status: "wartend" | "in_arbeit" | "abgeschlossen" | "fehlgeschlagen";
+  status: TranscriptionStatus;
   created: string;
   started: string | null;
   finished: string | null;

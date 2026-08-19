@@ -8,16 +8,37 @@ function apiKey(): string {
   return key;
 }
 
-async function post<T>(path: string, body: unknown, contentType = "application/json"): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      "content-type": contentType,
-    },
-    body: contentType === "application/json" ? JSON.stringify(body) : (body as BodyInit),
-    cache: "no-store",
-  });
+async function post<T>(
+  path: string,
+  body: unknown,
+  contentType = "application/json",
+  timeoutMs?: number,
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey()}`,
+        "content-type": contentType,
+      },
+      body: contentType === "application/json" ? JSON.stringify(body) : (body as BodyInit),
+      cache: "no-store",
+      // Ohne eigene Frist hängt der Aufruf, bis irgendein Gateway dazwischen
+      // abbricht. Mit Frist bricht er berechenbar ab und der Auftrag kann
+      // gezielt wiederholt werden.
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new PlatformError(
+        `${path}: Zeitüberschreitung nach ${Math.round((timeoutMs ?? 0) / 1000)} s.`,
+        504,
+        "timeout",
+      );
+    }
+    throw error;
+  }
   const text = await res.text();
   if (!res.ok) {
     let message = text.slice(0, 500);
@@ -84,14 +105,24 @@ export type GeminiRequest = {
   generationConfig?: Record<string, unknown>;
 };
 
+/**
+ * Grösse, die der Endpunkt für eine Anfrage annimmt. Audiodaten passen deshalb
+ * nicht als `inlineData` in die Anfrage – sie werden vorher abgelegt und über
+ * `fileData` referenziert (siehe `platformUploadAudio`).
+ */
+export const GEMINI_MAX_REQUEST_BYTES = 200 * 1024;
+
 export type GeminiResponse = {
   text: string;
   images?: { url: string; mimeType: string }[];
   model?: string;
 };
 
-export async function platformGemini(request: GeminiRequest): Promise<GeminiResponse> {
-  return post<GeminiResponse>("/gemini", request);
+export async function platformGemini(
+  request: GeminiRequest,
+  options: { timeoutMs?: number } = {},
+): Promise<GeminiResponse> {
+  return post<GeminiResponse>("/gemini", request, "application/json", options.timeoutMs);
 }
 
 /* ------------------------------------------------------------- Dateiablage */
@@ -105,6 +136,28 @@ export type UploadResult = { url: string; bytes: number };
  * unveränderten Bytes als Medien-Container übergeben. Der tatsächliche Typ der
  * Aufnahme steht im Datensatz und wird von /api/audio beim Ausliefern gesetzt.
  */
-export async function platformUploadAudio(bytes: Uint8Array | Buffer): Promise<UploadResult> {
-  return post<UploadResult>("/upload", bytes, "video/mp4");
+export async function platformUploadAudio(
+  bytes: Uint8Array | Buffer,
+  options: { timeoutMs?: number } = {},
+): Promise<UploadResult> {
+  return post<UploadResult>("/upload", bytes, "video/mp4", options.timeoutMs);
+}
+
+/** Lädt eine zuvor abgelegte Datei wieder als Rohbytes. */
+export async function platformFetchBytes(
+  url: string,
+  options: { timeoutMs?: number } = {},
+): Promise<Uint8Array> {
+  const res = await fetch(url, {
+    cache: "no-store",
+    signal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
+  });
+  if (!res.ok) {
+    throw new PlatformError(
+      `Die Audiodatei konnte nicht gelesen werden (${res.status}).`,
+      res.status,
+      String(res.status),
+    );
+  }
+  return new Uint8Array(await res.arrayBuffer());
 }

@@ -87,11 +87,22 @@ export default async function AufnahmeDetailPage({
     ["Upload-Zeitpunkt", formatDateTimeWithSeconds(recording.uploadedAt)],
     ["Transkription", <StatusBadge key="s" status={recording.transcriptionStatus} />],
     [
-      failed ? "Letzter Versuch" : "Transkription abgeschlossen",
+      failed ? "Letzter Versuch" : "Auswertung abgeschlossen",
       recording.transcriptionFinishedAt
         ? formatDateTimeWithSeconds(recording.transcriptionFinishedAt)
         : "–",
     ],
+    ...((recording.transcriptionChunks ?? 1) > 1
+      ? ([
+          [
+            "Verarbeitet in",
+            `${recording.transcriptionChunks} Abschnitten zu je rund 60 Sekunden` +
+              ((recording.transcriptionGaps?.length ?? 0) > 0
+                ? `, davon ${recording.transcriptionGaps!.length} ohne Text`
+                : ""),
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
     ...(nextAttemptLabel
       ? ([["Nächster automatischer Versuch", `${nextAttemptLabel} Uhr`]] as [string, React.ReactNode][])
       : []),
@@ -172,6 +183,7 @@ export default async function AufnahmeDetailPage({
           errorMessage={recording.transcriptionError}
           nextAttemptLabel={nextAttemptLabel}
           lastAttemptAt={recording.transcriptionFinishedAt}
+          gaps={recording.transcriptionGaps ?? []}
           startMs={startMs}
           initialQuery={initialQuery}
         />

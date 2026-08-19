@@ -12,7 +12,13 @@ Verkaufsgespräche der Immotrust AG.
 - **Sammelupload**: Mehrfachauswahl und Drag-and-drop für WAV und MP3, Metadaten aus dem Dateinamen,
   Korrektur-Modal für nicht lesbare Namen, Fortschritt und Ergebnis je Datei.
 - **Transkription**: Nach dem Upload erzeugt Gemini automatisch ein deutsches Transkript mit
-  Sprechertrennung sowie Satz- und Wort-Zeitstempeln.
+  Sprechertrennung und einem Zeitstempel je Satz. Aufnahmen über zwei Minuten werden dafür in
+  Abschnitte von rund einer Minute geteilt, abschnittsweise transkribiert und wieder zusammengesetzt.
+  Enthält eine Aufnahme nichts Gesprochenes, erhält sie den Status „Keine Sprache“ statt einer
+  Fehlermeldung.
+- **Eigener Name**: Unter „Einstellungen“ ändert jede Person den angezeigten Namen ihres Kontos
+  selbst. Die Änderung zieht die bereits gespeicherten Kopien an Kommentaren, Bewertungen und
+  hochgeladenen Aufnahmen mit; die E-Mail-Adresse bleibt als Kennung unverändert.
 - **Aufnahmenübersicht**: Tabelle mit allen Metadaten, Volltextsuche über Metadaten und Transkripte
   mit hervorgehobenen Ausschnitten, Filter, Sortierung und serverseitige Seitennavigation.
 - **Detailansicht**: WaveSurfer.js-Player (Wiedergabe, Scrubbing, Lautstärke, Tempo), synchron
@@ -72,8 +78,8 @@ werden keine Beispieldaten erzeugt.
 | Pfad | Inhalt |
 | --- | --- |
 | `src/app/page.tsx`, `src/app/anmelden`, `src/app/registrieren`, `src/app/passwort-vergessen` | statisch vorgerenderte öffentliche Seiten |
-| `src/app/(intern)` | Bereich hinter der Anmeldung: Aufnahmen, Upload, Admin |
-| `src/app/actions` | Server Actions für Anmeldung, Aufnahmen und Administration |
+| `src/app/(intern)` | Bereich hinter der Anmeldung: Aufnahmen, Upload, Einstellungen, Admin |
+| `src/app/actions` | Server Actions für Anmeldung, Aufnahmen, Profil und Administration |
 | `src/app/api/upload` | Entgegennahme der Audiodateien inklusive Signaturprüfung |
 | `src/app/api/audio/[id]` | Ausliefern der Aufnahme mit Bereichsanfragen und signiertem Token |
 | `src/lib` | Datenzugriff, Authentifizierung, E-Mail-Versand, Dateinamensanalyse, Transkription |
@@ -89,6 +95,12 @@ ADMIN_PASSWORD=… node scripts/browser-check.mjs   # vollständiger Funktionsdu
 PRUEF_PASSWORT=… node scripts/check-tastatur.mjs  # Tabulator-Reihenfolge und Sprunglinks im Detail
 node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
+node scripts/check-einstellungen.mjs   # Einstellungen und Ändern des eigenen Namens
+
+# ohne laufenden Server, direkt gegen Datenschicht und Transkriptionsdienst
+npx tsx --env-file=.env.local --conditions=react-server scripts/check-audio-split.mts
+npx tsx --env-file=.env.local --conditions=react-server scripts/check-namensabgleich.mts
+npx tsx --env-file=.env.local --conditions=react-server scripts/check-transkription-abschnitte.mts
 
 # Reset-Weg: kein Link in der Oberfläche, aber Reset-Link erzeugen im Dashboard funktioniert
 ADMIN_PASSWORD=… node scripts/check-reset-link.mjs http://localhost:3010
@@ -108,6 +120,19 @@ Testkonten, Testaufnahmen, Kommentare und Bewertungen.
 Enter als Sprung an die Audioposition, Mausklick auf ein Wort als Sprung an die Wortposition sowie
 Sichtbarkeit und Ziel der beiden Sprunglinks. Es wählt dafür das längste vorhandene Transkript und
 meldet sich mit `PRUEF_EMAIL` (Vorgabe: ein Mitarbeitendenkonto) und `PRUEF_PASSWORT` an.
+
+`check-einstellungen.mjs` prüft die Seite „Einstellungen“ im Browser: Erreichbarkeit über die
+Navigation, den vorbelegten Namen, die Abweisung zu kurzer Eingaben, das Speichern samt sofortiger
+Wirkung im Kopfbereich und die unveränderliche E-Mail-Adresse. Der ursprüngliche Name wird am Ende
+wieder eingesetzt.
+
+`check-namensabgleich.mts` legt ein Prüfkonto mit je einer Aufnahme, einem Kommentar und einer
+Bewertung an und stellt sicher, dass eine Namensänderung alle drei Kopien mitzieht, den Anrufernamen
+aus dem Dateinamen aber unberührt lässt. `check-audio-split.mts` rechnet nach, dass die Abschnitte
+einer langen Aufnahme lückenlos aneinander anschliessen und zusammen wieder das Original ergeben.
+`check-transkription-abschnitte.mts` lässt eine lange und eine stille Aufnahme wirklich
+transkribieren und prüft aufsteigende Zeitstempel über die Abschnittsgrenzen hinweg sowie den
+Abschluss `ohne_sprache`. Alle drei räumen ihre Daten selbst wieder ab.
 
 Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.
 
@@ -145,6 +170,24 @@ Schlüssel nicht im Admin-Dashboard hinterlegt wird.
   (aufsteigende Zeiten, Wortzerlegung als Rückfallebene) und wegen der Grössenbegrenzung der
   Datenbank in Teildokumente zerlegt. Für Suche und Anzeige entsteht zusätzlich ein kompakter
   Volltext-Index.
+- **Lange Aufnahmen**: Die Antwortzeit des Dienstes hängt an der Menge des erzeugten JSON. Eine
+  ganze Aufnahme in einer Anfrage läuft ab wenigen Minuten Gesprächslänge in die
+  Zeitüberschreitung des vorgelagerten Gateways – bei jedem Versuch gleich, eine Wiederholung mit
+  derselben Datei hilft also nicht. Ab zwei Minuten wird die Datei deshalb ohne Neucodierung in
+  Abschnitte von rund einer Minute geschnitten (WAV blockweise, MP3 an Frame-Grenzen), jeder
+  Abschnitt einzeln transkribiert und das Ergebnis mit dem passenden Zeitversatz zusammengesetzt.
+  Zwei Abschnitte laufen gleichzeitig; bei mehr geraten die Anfragen einander in die Quere.
+  Wortzeiten werden nicht mehr beim Dienst angefragt, weil sie die Antwortzeit vervielfachten; sie
+  werden innerhalb des gemessenen Satzes gleichmässig verteilt. Gemessen: fünf Minuten Gespräch in
+  gut zwei Minuten statt gar nicht.
+- **Lücken statt Totalausfall**: Bleibt ein einzelner Abschnitt auch nach drei Anläufen ohne
+  Antwort, kostet das nur diesen Abschnitt. Der übrige Text wird gespeichert, der fehlende
+  Zeitbereich am Datensatz vermerkt und über dem Transkript benannt, samt Schaltfläche für einen
+  neuen Lauf.
+- **Keine Sprache als Abschluss**: Ein leeres Ergebnis bedeutet, dass der Dienst die Aufnahme gehört
+  und nichts Gesprochenes gefunden hat – bei Freizeichen, Besetztton oder aufgelegtem Hörer der
+  Normalfall. Das gilt als Abschluss (`ohne_sprache`), nicht als Fehler: Es wird nicht wiederholt,
+  nicht rot dargestellt und ist in der Übersicht filterbar.
 - **Aufträge**: Jede Aufnahme hat genau einen Transkriptionsauftrag. Er wird vor der Ausführung
   gesperrt, sodass parallele Aufrufe, wiederholte Klicks oder ein erneuter Upload keine doppelten
   Läufe erzeugen. Hängengebliebene Aufträge werden nach zehn Minuten wieder aufgenommen.

@@ -18,7 +18,17 @@ export type SessionUser = {
   isAdmin: boolean;
 };
 
-export type TranscriptionStatus = "wartend" | "in_arbeit" | "abgeschlossen" | "fehlgeschlagen";
+/**
+ * `ohne_sprache` ist ein Abschluss, kein Fehler: Der Dienst hat die Aufnahme
+ * gehört und darin nichts Gesprochenes gefunden (Freizeichen, Besetztton,
+ * aufgelegt). Solche Aufträge werden nicht wiederholt.
+ */
+export type TranscriptionStatus =
+  | "wartend"
+  | "in_arbeit"
+  | "abgeschlossen"
+  | "ohne_sprache"
+  | "fehlgeschlagen";
 
 export type Recording = {
   _id: string;
@@ -48,6 +58,14 @@ export type Recording = {
   transcriptionAttempts: number;
   speakerCount: number | null;
   wordCount: number | null;
+  /** Zahl der Abschnitte, in die die Aufnahme zum Transkribieren geteilt wurde. */
+  transcriptionChunks?: number | null;
+  /**
+   * Zeitbereiche, für die kein Text vorliegt, weil der Dienst den betreffenden
+   * Abschnitt auch nach Wiederholungen nicht beantwortet hat. Der Rest des
+   * Transkripts ist gültig; die Lücken werden in der Ansicht benannt.
+   */
+  transcriptionGaps?: { startMs: number; endMs: number }[] | null;
   deletionFlagged: boolean;
   deletionFlaggedBy: string | null;
   deletionFlaggedAt: string | null;

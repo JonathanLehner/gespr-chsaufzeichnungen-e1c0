@@ -31,6 +31,7 @@ export function AppHeader({ user }: { user: SessionUser }) {
     <>
       <NavLink href="/aufnahmen">Aufnahmen</NavLink>
       <NavLink href="/upload">Sammelupload</NavLink>
+      <NavLink href="/einstellungen">Einstellungen</NavLink>
       {user.isAdmin && <NavLink href="/admin">Admin-Dashboard</NavLink>}
     </>
   );

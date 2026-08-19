@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { randomBytes, createHash } from "node:crypto";
 import { Collections, findById, insertOne, insertUnique, updateOne, deleteById, deleteMany } from "./db";
 import { hashPassword, passwordProblem, verifyPassword } from "./passwords";
+import { defaultNameFromEmail, normalizeName } from "./profile-name";
 import type { SessionUser, User } from "./types";
 
 export { hashPassword, passwordProblem, verifyPassword };
@@ -125,7 +126,9 @@ export async function createUser(params: {
   const created = await insertUnique(Collections.users, {
     _id: email,
     email,
-    name: params.name.trim() || email.split("@")[0],
+    // Ohne Angabe wird der Name aus der Adresse abgeleitet. Das ist nur ein
+    // Startwert; geändert wird er unter „Einstellungen“.
+    name: normalizeName(params.name) || defaultNameFromEmail(email),
     role: isSuperuser(email) ? "admin" : "user",
     passwordHash,
     emailVerified: false,
