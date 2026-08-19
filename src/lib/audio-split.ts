@@ -146,7 +146,19 @@ const MP3_SAMPLE_RATES: Record<number, number[]> = {
   0: [11025, 12000, 8000], // MPEG 2.5
 };
 
-type Mp3Frame = { offset: number; length: number; durationMs: number };
+export type Mp3Frame = {
+  offset: number;
+  length: number;
+  durationMs: number;
+  /** 3 = MPEG 1, 2 = MPEG 2, 0 = MPEG 2.5 */
+  version: number;
+  channels: number;
+  sampleRate: number;
+  /** Auf einen Frame mit Prüfsumme folgen zwei Bytes vor der Seiteninformation. */
+  hasCrc: boolean;
+  /** Zahl der Granulate im Frame: 2 bei MPEG 1, sonst 1. */
+  granules: number;
+};
 
 /** Überspringt einen vorangestellten ID3v2-Block. */
 function mp3Start(bytes: Uint8Array): number {
@@ -164,9 +176,11 @@ function readMp3Frame(bytes: Uint8Array, offset: number): Mp3Frame | null {
 
   const version = (bytes[offset + 1] >> 3) & 0x03; // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
   const layer = (bytes[offset + 1] >> 1) & 0x03; // 1 = Layer III
+  const hasCrc = (bytes[offset + 1] & 0x01) === 0;
   const bitrateIndex = (bytes[offset + 2] >> 4) & 0x0f;
   const rateIndex = (bytes[offset + 2] >> 2) & 0x03;
   const padding = (bytes[offset + 2] >> 1) & 0x01;
+  const mode = (bytes[offset + 3] >> 6) & 0x03; // 3 = ein Kanal
 
   if (version === 1 || layer !== 1) return null;
   if (bitrateIndex === 0 || bitrateIndex === 15 || rateIndex === 3) return null;
@@ -179,10 +193,19 @@ function readMp3Frame(bytes: Uint8Array, offset: number): Mp3Frame | null {
   const length = Math.floor((samplesPerFrame / 8) * (bitrate / sampleRate)) + padding;
   if (length < 4 || offset + length > bytes.length) return null;
 
-  return { offset, length, durationMs: (samplesPerFrame / sampleRate) * 1000 };
+  return {
+    offset,
+    length,
+    durationMs: (samplesPerFrame / sampleRate) * 1000,
+    version,
+    channels: mode === 3 ? 1 : 2,
+    sampleRate,
+    hasCrc,
+    granules: version === 3 ? 2 : 1,
+  };
 }
 
-function mp3Frames(bytes: Uint8Array): Mp3Frame[] {
+export function mp3Frames(bytes: Uint8Array): Mp3Frame[] {
   const frames: Mp3Frame[] = [];
   let offset = mp3Start(bytes);
   let misses = 0;

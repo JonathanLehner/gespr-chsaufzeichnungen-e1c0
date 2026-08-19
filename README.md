@@ -12,10 +12,17 @@ Verkaufsgespräche der Immotrust AG.
 - **Sammelupload**: Mehrfachauswahl und Drag-and-drop für WAV und MP3, Metadaten aus dem Dateinamen,
   Korrektur-Modal für nicht lesbare Namen, Fortschritt und Ergebnis je Datei.
 - **Transkription**: Nach dem Upload erzeugt Gemini automatisch ein deutsches Transkript mit
-  Sprechertrennung und einem Zeitstempel je Satz. Aufnahmen über zwei Minuten werden dafür in
-  Abschnitte von rund einer Minute geteilt, abschnittsweise transkribiert und wieder zusammengesetzt.
-  Enthält eine Aufnahme nichts Gesprochenes, erhält sie den Status „Keine Sprache“ statt einer
-  Fehlermeldung.
+  Sprechertrennung. Aufnahmen über zwei Minuten werden dafür in Abschnitte von rund einer Minute
+  geteilt, abschnittsweise transkribiert und wieder zusammengesetzt. Enthält eine Aufnahme nichts
+  Gesprochenes, erhält sie den Status „Keine Sprache“ statt einer Fehlermeldung.
+- **Zeiten aus der Aufnahme, nicht aus dem Modell**: Die Zeitangaben des Sprachmodells werden
+  verworfen und durch gemessene ersetzt (`src/lib/forced-alignment.ts`). Aus dem Lautstärkeverlauf
+  der Datei werden die Sprechabschnitte bestimmt; darauf wird der Text im Verhältnis der Silben
+  verteilt und die Satzgrenzen werden per dynamischer Programmierung auf die Pausen gezogen.
+  Am Bestand gemessen lag ein Satzanfang zuvor im Mittel 0,2 s und im schlechtesten Fall 80 s neben
+  dem tatsächlichen Sprechbeginn; danach liegt er auf der Sprechflanke. Der Text selbst bleibt
+  unverändert. Ist die Audiodatei nicht lesbar, bleiben die geschätzten Zeiten stehen und das
+  Transkript wird sichtbar als „Zeiten geschätzt“ gekennzeichnet.
 - **Eigener Name**: Unter „Einstellungen“ ändert jede Person den angezeigten Namen ihres Kontos
   selbst. Die Änderung zieht die bereits gespeicherten Kopien an Kommentaren, Bewertungen und
   hochgeladenen Aufnahmen mit; die E-Mail-Adresse bleibt als Kennung unverändert.
@@ -24,16 +31,17 @@ Verkaufsgespräche der Immotrust AG.
 - **Detailansicht**: WaveSurfer.js-Player (Wiedergabe, Scrubbing, Lautstärke, Tempo), synchron
   mitlaufendes Transkript, Sprung per Klick auf einen Satz, Suche im Transkript, Kommentare und
   persönliche Bewertung von 1 bis 10.
-- **Mitlaufen im Transkript**: Hervorgehoben wird der laufende Satz, nicht das einzelne Wort. Der
-  Dienst liefert keine Wortzeiten; sie werden innerhalb des Satzes geschätzt und die Wortmarkierung
-  stand deshalb regelmässig auf einem anderen Wort als dem gehörten. Die Liste rückt erst nach,
-  wenn die laufende Zeile den Ausschnitt verlässt, und gemessen wird dabei gegen die Liste statt
-  gegen die Seite – vorher sprang sie bei jedem Satzwechsel ans Ende. Scrollen von Hand schaltet
-  das Kästchen „Mitlaufen“ ab, damit die Wiedergabe die Ansicht nicht zurückzieht.
+- **Mitlaufen im Transkript**: Hervorgehoben werden die laufende Zeile und darin das laufende Wort.
+  Die Wortmarkierung ruht in Sprechpausen, weil die Wortzeiten auf gemessener Sprechzeit stehen und
+  Pausen darin nicht vorkommen. Die Liste rückt erst nach, wenn die laufende Zeile den Ausschnitt
+  verlässt, und gemessen wird dabei gegen die Liste statt gegen die Seite – vorher sprang sie bei
+  jedem Satzwechsel ans Ende. Scrollen von Hand schaltet das Kästchen „Mitlaufen“ ab, damit die
+  Wiedergabe die Ansicht nicht zurückzieht.
 - **Tastaturbedienung der Detailansicht**: Im Transkript ist genau ein Satz eine Tabulator-Station;
-  Enter springt an den Satzanfang, ein Mausklick mitten im Text ebenso. Am
-  Anfang des Seiteninhalts stehen die Sprunglinks „Zum Transkript“ und „Zu den Metadaten und
-  Kommentaren“, die erst beim Fokussieren sichtbar werden.
+  Enter springt an den Satzanfang. Mit der Maus springt ein Klick auf ein einzelnes Wort an dieses
+  Wort, ein Klick daneben an den Satzanfang. Am Anfang des Seiteninhalts stehen die Sprunglinks
+  „Zum Transkript“ und „Zu den Metadaten und Kommentaren“, die erst beim Fokussieren sichtbar
+  werden.
 - **Löschungen**: Mitarbeitende setzen nur eine Löschmarkierung („Zur Löschung markieren“ /
   „Markierung bestätigen“). Zeilenstatus und Beschriftung wechseln sofort nach dem Klick, während
   des Speicherns erscheint ein Wartehinweis, danach eine kurze Bestätigung. Endgültig gelöscht wird
@@ -89,6 +97,8 @@ werden keine Beispieldaten erzeugt.
 | `src/app/api/upload` | Entgegennahme der Audiodateien inklusive Signaturprüfung |
 | `src/app/api/audio/[id]` | Ausliefern der Aufnahme mit Bereichsanfragen und signiertem Token |
 | `src/lib` | Datenzugriff, Authentifizierung, E-Mail-Versand, Dateinamensanalyse, Transkription |
+| `src/lib/audio-split.ts`, `src/lib/audio-envelope.ts` | verlustfreies Zerlegen der Aufnahme und ihr Lautstärkeverlauf (WAV direkt, MP3 über `global_gain` der Seiteninformation) |
+| `src/lib/forced-alignment.ts`, `src/lib/syllables.ts` | Ausrichtung des Transkripts an der Aufnahme; Silbenzahl über `hypher` mit deutschen Trennmustern |
 | `scripts` | Bildgenerierung, WebP-Varianten, Funktions- und Leistungstest |
 
 ## Prüfung
@@ -107,6 +117,18 @@ node scripts/check-einstellungen.mjs   # Einstellungen und Ändern des eigenen N
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-audio-split.mts
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-namensabgleich.mts
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-transkription-abschnitte.mts
+
+# Ausrichtung der Zeiten an der Aufnahme
+npx tsx --env-file=.env.local --conditions=react-server scripts/check-ausrichtung.mts
+npx tsx --env-file=.env.local --conditions=react-server scripts/check-mp3-verlauf.mts
+
+# Gegenprobe zur Ausrichtung: schneidet Sätze an den ausgerichteten Zeiten aus
+# und lässt nur diesen Ausschnitt transkribieren (kostet Aufrufe des Dienstes)
+npx tsx --env-file=.env.local --conditions=react-server scripts/check-ausrichtung-hoerprobe.mts
+
+# einmalige Nachbesserung: richtet Transkripte aus der Zeit vor der Ausrichtung
+# nachträglich aus, ohne sie neu erzeugen zu lassen
+npx tsx --env-file=.env.local --conditions=react-server scripts/realign-transcripts.mts
 
 # Reset-Weg: kein Link in der Oberfläche, aber Reset-Link erzeugen im Dashboard funktioniert
 ADMIN_PASSWORD=… node scripts/check-reset-link.mjs http://localhost:3010

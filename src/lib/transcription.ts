@@ -9,6 +9,7 @@ import {
   upsertById,
 } from "./db";
 import { measureDurationMs, splitAudio, type AudioChunk } from "./audio-split";
+import { alignTranscript } from "./forced-alignment";
 import {
   platformFetchBytes,
   platformGemini,
@@ -17,6 +18,7 @@ import {
 } from "./platform";
 import { invalidateRecordingCache } from "./recordings";
 import type {
+  AlignmentSource,
   Job,
   Recording,
   TranscriptIndexDoc,
@@ -73,6 +75,15 @@ const RETRY_DELAYS_MS = [3 * 60 * 1000, 15 * 60 * 1000];
 /** Mindestabstand zwischen zwei Warteschlangenläufen je Serverinstanz. */
 const SWEEP_INTERVAL_MS = 30 * 1000;
 
+/**
+ * Die abgefragten Zeitangaben sind nur noch Rückfallwerte.
+ *
+ * Sie werden nach dem Transkribieren durch gemessene ersetzt (siehe
+ * `src/lib/forced-alignment.ts`) und kommen nur dann zum Tragen, wenn die
+ * Audiodatei nicht abrufbar war. Sie bleiben trotzdem im Prompt: Sie kosten je
+ * Satz zwei Zahlen, halten das Modell aber dazu an, die Aufnahme der Reihe nach
+ * durchzuhören, statt sie zusammenzufassen.
+ */
 const PROMPT = `Du bist ein professioneller Transkriptionsdienst für deutschsprachige Verkaufsgespräche einer Immobilienfirma.
 
 Aufgabe: Transkribiere die beigefügte Audioaufnahme vollständig und wortgetreu auf Deutsch.
@@ -348,6 +359,43 @@ export async function loadTranscript(recordingId: string): Promise<TranscriptSeg
     .flatMap((part) => part.segments ?? []);
 }
 
+/**
+ * Richtet ein bereits vorhandenes Transkript neu an seiner Aufnahme aus.
+ *
+ * Das kostet keinen Aufruf des Transkriptionsdienstes – der Text bleibt, nur
+ * die Zeiten werden ersetzt. Gedacht für Transkripte, die vor der Einführung
+ * der Ausrichtung entstanden sind.
+ */
+export async function realignRecording(
+  recordingId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const recording = await findById<Recording>(Collections.recordings, recordingId);
+  if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
+
+  const segments = await loadTranscript(recordingId);
+  if (segments.length === 0) return { ok: false, message: "Kein Transkript vorhanden." };
+
+  const bytes = await platformFetchBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
+  const aligned = alignTranscript(segments, bytes, recording.mimeType, {
+    gaps: recording.transcriptionGaps ?? [],
+  });
+  if (!aligned) return { ok: false, message: "Die Aufnahme trägt zu wenig verwertbare Sprache." };
+
+  const speakerLabels = [...new Set(aligned.segments.map((segment) => segment.speakerLabel))];
+  await saveTranscript(recordingId, aligned.segments, speakerLabels);
+  await updateOne(
+    Collections.recordings,
+    { _id: recordingId },
+    { $set: { transcriptionAlignment: "akustisch" } },
+  );
+  invalidateRecordingCache();
+
+  return {
+    ok: true,
+    message: `${aligned.speechMs} ms Sprache in ${aligned.regionCount} Abschnitten.`,
+  };
+}
+
 /* --------------------------------------------------------------- Auftrags-Lauf */
 
 /**
@@ -529,42 +577,65 @@ type RunResult = NormalizedTranscript & {
   chunkCount: number;
   measuredDurationMs: number | null;
   gaps: TranscriptGap[];
+  alignment: AlignmentSource;
 };
 
 /**
- * Wählt den Weg zum Transkript. Kurze Aufnahmen gehen unverändert als eine
- * Anfrage an den Dienst; erst für längere lohnt es sich, die Datei zu holen und
- * zu zerlegen. Lässt sich das Format nicht verlustfrei schneiden, bleibt es
- * beim einen Aufruf – das Ergebnis ist dann dasselbe wie bisher.
+ * Wählt den Weg zum Transkript und richtet es anschliessend an der Aufnahme
+ * aus.
+ *
+ * Kurze Aufnahmen gehen unverändert als eine Anfrage an den Dienst; erst für
+ * längere lohnt es sich, sie zu zerlegen. Lässt sich das Format nicht
+ * verlustfrei schneiden, bleibt es beim einen Aufruf.
+ *
+ * Die Datei selbst wird in jedem Fall geholt, weil die Zeiten des Dienstes
+ * verworfen und aus dem Lautstärkeverlauf neu bestimmt werden (siehe
+ * `src/lib/forced-alignment.ts`). Misslingt der Abruf, ist das kein Fehlschlag:
+ * Das Transkript entsteht dann mit den geschätzten Zeiten, wie es sie bisher
+ * hatte.
  */
 async function runTranscription(recording: Recording): Promise<RunResult> {
-  const whole = async (measuredDurationMs: number | null): Promise<RunResult> => ({
+  let bytes: Uint8Array | null = null;
+  try {
+    bytes = await platformFetchBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
+  } catch (error) {
+    console.warn(
+      `[transkription] ${recording._id}: Audiodatei nicht abrufbar – ` +
+        `Wortzeiten bleiben geschätzt (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+
+  const measuredDurationMs = bytes ? measureDurationMs(bytes, recording.mimeType) : null;
+  const durationMs = measuredDurationMs ?? recording.durationMs;
+
+  const whole = async () => ({
     ...(await requestTranscript(PROMPT, {
       fileData: { fileUri: recording.audioUrl, mimeType: recording.mimeType },
     })),
     chunkCount: 1,
-    measuredDurationMs,
-    gaps: [],
+    gaps: [] as TranscriptGap[],
   });
 
-  if (recording.durationMs !== null && recording.durationMs <= DIRECT_LIMIT_MS) {
-    return whole(null);
-  }
+  const chunks =
+    bytes && (durationMs === null || durationMs > DIRECT_LIMIT_MS)
+      ? splitAudio(bytes, recording.mimeType, CHUNK_TARGET_MS)
+      : null;
+  const base =
+    chunks && chunks.length >= 2
+      ? { ...(await transcribeChunks(recording, chunks)), chunkCount: chunks.length }
+      : await whole();
 
-  const bytes = await platformFetchBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
-  const measuredDurationMs = measureDurationMs(bytes, recording.mimeType);
-  const durationMs = measuredDurationMs ?? recording.durationMs;
-  if (durationMs !== null && durationMs <= DIRECT_LIMIT_MS) {
-    return whole(measuredDurationMs);
-  }
-
-  const chunks = splitAudio(bytes, recording.mimeType, CHUNK_TARGET_MS);
-  if (!chunks || chunks.length < 2) return whole(measuredDurationMs);
+  const aligned = bytes
+    ? alignTranscript(base.segments, bytes, recording.mimeType, { gaps: base.gaps })
+    : null;
+  const segments = aligned?.segments ?? base.segments;
 
   return {
-    ...(await transcribeChunks(recording, chunks)),
-    chunkCount: chunks.length,
+    ...base,
+    segments,
+    endMs: segments.length > 0 ? segments[segments.length - 1].endMs : 0,
     measuredDurationMs,
+    alignment: aligned ? "akustisch" : "geschaetzt",
   };
 }
 
@@ -613,6 +684,7 @@ export async function transcribeRecording(recordingId: string): Promise<
           wordCount: result.wordCount,
           transcriptionChunks: result.chunkCount,
           transcriptionGaps: result.gaps.length > 0 ? result.gaps : null,
+          transcriptionAlignment: result.alignment,
           ...(duration > 0 ? { durationMs: duration } : {}),
         },
       },

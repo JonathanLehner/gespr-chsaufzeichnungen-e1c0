@@ -66,6 +66,8 @@ export type Recording = {
    * Transkripts ist gültig; die Lücken werden in der Ansicht benannt.
    */
   transcriptionGaps?: { startMs: number; endMs: number }[] | null;
+  /** Fehlt bei Transkripten aus der Zeit vor der akustischen Ausrichtung. */
+  transcriptionAlignment?: AlignmentSource | null;
   deletionFlagged: boolean;
   deletionFlaggedBy: string | null;
   deletionFlaggedAt: string | null;
@@ -73,6 +75,15 @@ export type Recording = {
   ratingAverage: number | null;
   ratingCount: number;
 };
+
+/**
+ * Herkunft der Zeitangaben eines Transkripts.
+ *
+ * `akustisch`: an der Aufnahme ausgerichtet – die Wortmarkierung folgt dem
+ * Gehörten. `geschaetzt`: die Datei war beim Transkribieren nicht lesbar, die
+ * Zeiten stammen aus dem Sprachmodell und sind nur grob.
+ */
+export type AlignmentSource = "akustisch" | "geschaetzt";
 
 export type TranscriptWord = {
   text: string;

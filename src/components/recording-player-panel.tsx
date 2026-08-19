@@ -6,7 +6,7 @@ import { TranscriptView } from "@/components/transcript-view";
 import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
 import { formatDuration } from "@/lib/time";
 import { describeTranscriptionError, retryHint } from "@/lib/transcription-errors";
-import type { TranscriptSegment, TranscriptionStatus } from "@/lib/types";
+import type { AlignmentSource, TranscriptSegment, TranscriptionStatus } from "@/lib/types";
 
 export function RecordingPlayerPanel({
   audioSrc,
@@ -17,6 +17,7 @@ export function RecordingPlayerPanel({
   nextAttemptLabel,
   lastAttemptAt,
   gaps,
+  alignment,
   startMs,
   initialQuery,
 }: {
@@ -30,6 +31,8 @@ export function RecordingPlayerPanel({
   lastAttemptAt: string | null;
   /** Zeitbereiche ohne Text, weil der Dienst den Abschnitt nicht beantwortet hat. */
   gaps: { startMs: number; endMs: number }[];
+  /** Herkunft der Zeitangaben; `null` bei Transkripten vor der Ausrichtung. */
+  alignment: AlignmentSource | null;
   startMs: number;
   initialQuery: string;
 }) {
@@ -59,6 +62,7 @@ export function RecordingPlayerPanel({
               segments={segments}
               currentMs={currentMs}
               onSeek={handleSeek}
+              alignment={alignment}
               initialQuery={initialQuery}
             />
           </>

@@ -184,6 +184,7 @@ export default async function AufnahmeDetailPage({
           nextAttemptLabel={nextAttemptLabel}
           lastAttemptAt={recording.transcriptionFinishedAt}
           gaps={recording.transcriptionGaps ?? []}
+          alignment={recording.transcriptionAlignment ?? null}
           startMs={startMs}
           initialQuery={initialQuery}
         />

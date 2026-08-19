@@ -155,9 +155,11 @@ record(
   `${focusedId} → ${afterEnter.toFixed(1)} s`,
 );
 
-/* 4 – Mausklick mitten im Text springt an den Anfang dieses Satzes.
-   Wortzeiten liefert der Dienst nicht; sie wären innerhalb des Satzes geraten.
-   Verlässlich ist die Satzgrenze, und genau dorthin springt der Klick. */
+/* 4 – Mausklick auf ein Wort springt an dieses Wort, nicht an den Satzanfang.
+   Die Wortzeiten sind an der Aufnahme ausgerichtet und deshalb belastbar; ein
+   Klick weiter hinten im Satz muss entsprechend später landen als der
+   Satzanfang. Geprüft wird beides: die Nähe zur Wortzeit und der Abstand zum
+   Satzanfang. */
 await page.evaluate(() => {
   const audio = document.querySelector("audio");
   if (audio) {
@@ -165,25 +167,42 @@ await page.evaluate(() => {
     audio.currentTime = 0;
   }
 });
-const words = page.locator("[id^='satz-'] span[data-wort]");
-const wordIndex = Math.min(40, (await words.count()) - 1);
-await words.nth(wordIndex).click();
-await page.waitForTimeout(900);
-const afterWordClick = await page.evaluate(() => document.querySelector("audio")?.currentTime ?? 0);
-const wordSentenceStart = await page.evaluate((index) => {
-  const span = document.querySelectorAll("[id^='satz-'] span[data-wort]")[index];
-  const row = span?.closest('[id^="satz-"]');
-  return row?.querySelector("span")?.textContent ?? "";
-}, wordIndex);
-const [startMinutes, startSeconds] = wordSentenceStart.split(":").map(Number);
-const expectedStart = (startMinutes || 0) * 60 + (startSeconds || 0);
-record(
-  "Mausklick im Satztext springt an den Satzanfang",
-  // Der Klick startet die Wiedergabe; bis zur Messung läuft sie knapp eine
-  // Sekunde weiter. Geprüft wird deshalb ein Fenster, nicht ein Zeitpunkt.
-  afterWordClick > expectedStart - 0.5 && afterWordClick < expectedStart + 2.5,
-  `Wort ${wordIndex} im Satz ab ${wordSentenceStart} → ${afterWordClick.toFixed(1)} s`,
-);
+/* Ein Wort weit hinten in einem langen Satz – dort ist der Unterschied zum
+   Satzanfang messbar. */
+const target = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll('[id^="satz-"]')];
+  const row = rows.find((candidate) => candidate.querySelectorAll("span[data-wort]").length >= 8);
+  if (!row) return null;
+  const words = [...row.querySelectorAll("span[data-wort]")];
+  const index = words.length - 2;
+  const clock = row.querySelector("span")?.textContent ?? "0:00";
+  const [minutes, seconds] = clock.split(":").map(Number);
+  return {
+    rowId: row.id,
+    index,
+    text: words[index].textContent.trim(),
+    satzanfang: (minutes || 0) * 60 + (seconds || 0),
+  };
+});
+if (!target) {
+  record("Mausklick auf ein Wort springt an dieses Wort", false, "kein Satz mit genug Wörtern");
+} else {
+  await page
+    .locator(`#${target.rowId} span[data-wort]`)
+    .nth(target.index)
+    .click();
+  await page.waitForTimeout(900);
+  const afterWordClick = await page.evaluate(
+    () => document.querySelector("audio")?.currentTime ?? 0,
+  );
+  record(
+    "Mausklick auf ein Wort springt an dieses Wort",
+    // Der Klick startet die Wiedergabe; bis zur Messung läuft sie knapp eine
+    // Sekunde weiter. Geprüft wird deshalb ein Fenster, nicht ein Zeitpunkt.
+    afterWordClick > target.satzanfang + 0.3 && afterWordClick < target.satzanfang + 60,
+    `„${target.text}“ in ${target.rowId} ab ${target.satzanfang} s → ${afterWordClick.toFixed(1)} s`,
+  );
+}
 await page.evaluate(() => document.querySelector("audio")?.pause());
 
 /* 5 – Sprunglinks */

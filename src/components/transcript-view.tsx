@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { TranscriptSegment } from "@/lib/types";
+import { Fragment, memo, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { AlignmentSource, TranscriptSegment } from "@/lib/types";
 
 export type FlatSentence = {
   index: number;
@@ -85,9 +85,34 @@ function matchedWordIndexes(words: { text: string }[], query: string): Set<numbe
   return hits;
 }
 
+/**
+ * Ermittelt das laufende Wort einer Zeile.
+ *
+ * Zurückgegeben wird das zuletzt begonnene Wort; in einer Sprechpause bleibt
+ * die Markierung damit auf dem zuletzt gesprochenen stehen, statt vorzueilen.
+ * Vor dem ersten Wort des Satzes ist keines markiert.
+ */
+function activeWordIndex(words: { startMs: number }[], currentMs: number): number {
+  let low = 0;
+  let high = words.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (words[middle].startMs <= currentMs) {
+      found = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
 type RowProps = {
   sentence: FlatSentence;
   active: boolean;
+  /** Laufendes Wort dieser Zeile, −1 wenn die Zeile nicht läuft. */
+  wordIndex: number;
   matchState: "keiner" | "treffer" | "aktuell";
   query: string;
   tone: string;
@@ -100,19 +125,18 @@ type RowProps = {
  *
  * Früher war jedes Wort fokussierbar; ein zwanzigminütiges Gespräch ergab damit
  * mehrere tausend Stationen, und die rechte Spalte mit Metadaten, Bewertung und
- * Kommentaren war per Tastatur praktisch unerreichbar.
+ * Kommentaren war per Tastatur praktisch unerreichbar. Der Klick auf ein
+ * einzelnes Wort springt trotzdem genau dorthin – dafür braucht es keinen
+ * eigenen Fokus, nur ein eigenes Klickziel.
  *
- * Ebenso wurde früher das gerade gesprochene Wort einzeln hervorgehoben. Der
- * Dienst liefert jedoch keine Wortzeiten – sie werden innerhalb des Satzes
- * gleichmässig geschätzt (siehe `normalizeTranscript`). Die Markierung stand
- * deshalb regelmässig auf einem anderen Wort als dem gehörten und blieb in
- * Sprechpausen auf dem letzten Wort stehen. Belastbar ist die Satzgrenze,
- * darum wird der laufende Satz als Ganzes hervorgehoben und ein Klick springt
- * an dessen Anfang.
+ * Hervorgehoben werden Zeile und laufendes Wort zugleich: die Zeile ruhig
+ * hinterlegt, das Wort deutlich. Ohne die Zeile verlöre man beim Zuhören den
+ * Ort im Text, ohne das Wort die Stelle im Satz.
  */
 const SentenceRow = memo(function SentenceRow({
   sentence,
   active,
+  wordIndex,
   matchState,
   query,
   tone,
@@ -122,15 +146,22 @@ const SentenceRow = memo(function SentenceRow({
   const hits = useMemo(() => matchedWordIndexes(sentence.words, query), [sentence.words, query]);
 
   return (
-    <button
-      type="button"
+    // Die Zeile ist die Tabulator-Station und trägt die Sprungmarke; die
+    // Wörter darin sind zusätzliche Klickziele ohne eigenen Fokus.
+    // select-text hält das Transkript kopierbar.
+    <div
       id={`satz-${sentence.index}`}
+      role="button"
+      tabIndex={0}
       aria-describedby={hintId}
       aria-current={active ? "true" : undefined}
       onClick={() => onSeek(sentence.startMs)}
-      // select-text hält das Transkript kopierbar; Schaltflächen unterbinden
-      // die Textauswahl sonst je nach Browser.
-      className={`group flex w-full select-text gap-3 rounded-[4px] px-2 py-1.5 text-left transition-colors ${
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onSeek(sentence.startMs);
+      }}
+      className={`group flex w-full cursor-pointer select-text gap-3 rounded-[4px] px-2 py-1.5 text-left transition-colors ${
         active ? "bg-petrol-soft" : matchState === "aktuell" ? "bg-[#fdeaa8]/60" : "hover:bg-canvas"
       }`}
     >
@@ -142,22 +173,39 @@ const SentenceRow = memo(function SentenceRow({
       >
         {timecode(sentence.startMs)}
       </span>
-      <span className="flex-1 text-[13.5px] leading-relaxed">
+      <p className="flex-1 text-[13.5px] leading-relaxed">
         {sentence.newSpeaker && (
           <span className={`badge mr-2 align-baseline ${tone}`}>{sentence.speakerLabel}</span>
         )}
-        {sentence.words.map((word, wordIndex) => (
-          <span
-            key={wordIndex}
-            data-wort=""
-            className={hits.has(wordIndex) ? "rounded-[2px] bg-[#fdeaa8]" : undefined}
-          >
-            {word.text}
-            {wordIndex < sentence.words.length - 1 ? " " : ""}
-          </span>
-        ))}
-      </span>
-    </button>
+        {sentence.words.map((word, index) => {
+          const running = index === wordIndex;
+          return (
+            // Das Leerzeichen steht ausserhalb der Markierung, sonst zöge sich
+            // die Hervorhebung bis an das nächste Wort heran.
+            <Fragment key={index}>
+              {index > 0 ? " " : ""}
+              <span
+                data-wort=""
+                aria-current={running ? "true" : undefined}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSeek(word.startMs);
+                }}
+                className={`rounded-[2px] ${
+                  running
+                    ? "bg-petrol px-0.5 text-white"
+                    : hits.has(index)
+                      ? "bg-[#fdeaa8]"
+                      : "hover:bg-white/70"
+                }`}
+              >
+                {word.text}
+              </span>
+            </Fragment>
+          );
+        })}
+      </p>
+    </div>
   );
 });
 
@@ -165,11 +213,13 @@ export function TranscriptView({
   segments,
   currentMs,
   onSeek,
+  alignment = null,
   initialQuery = "",
 }: {
   segments: TranscriptSegment[];
   currentMs: number;
   onSeek: (ms: number) => void;
+  alignment?: AlignmentSource | null;
   initialQuery?: string;
 }) {
   const sentences = useMemo(() => flattenSegments(segments), [segments]);
@@ -230,6 +280,19 @@ export function TranscriptView({
     }
     return found;
   }, [currentMs, starts]);
+
+  /**
+   * Das laufende Wort innerhalb der laufenden Zeile.
+   *
+   * Die Wortzeiten sind an der Aufnahme ausgerichtet (siehe
+   * `src/lib/forced-alignment.ts`), stehen also auf gemessener Sprechzeit und
+   * nicht auf einer Schätzung. Nur deshalb ist eine Markierung je Wort
+   * überhaupt vertretbar.
+   */
+  const activeWord = useMemo(() => {
+    if (activeIndex < 0) return -1;
+    return activeWordIndex(sentences[activeIndex].words, currentMs);
+  }, [activeIndex, currentMs, sentences]);
 
   /**
    * Holt eine Zeile in den sichtbaren Ausschnitt – aber nur, wenn sie ihn
@@ -295,6 +358,17 @@ export function TranscriptView({
         <span className="text-[12px] text-ink-faint">
           {sentences.length} Sätze · {speakerTone.size} Sprecher
         </span>
+        {/* Nur die Ausnahme wird benannt: Sind die Zeiten geschätzt statt
+            gemessen, steht die Wortmarkierung womöglich daneben, und das soll
+            man wissen, bevor man ihr folgt. */}
+        {alignment === "geschaetzt" && (
+          <span
+            className="badge bg-warn-soft text-warn"
+            title="Die Audiodatei war beim Transkribieren nicht lesbar. Die Zeiten stammen aus dem Sprachmodell und sind nur grob."
+          >
+            Zeiten geschätzt
+          </span>
+        )}
         {/* Suchfeld, Trefferzähler, Sprungtasten und „Mitlaufen“ stehen auf
             breiten Bildschirmen in einer Zeile. Auf schmalen Geräten reicht die
             Breite dafür nicht: Ohne Umbruch und ohne schrumpffähiges Suchfeld
@@ -374,6 +448,7 @@ export function TranscriptView({
             hintId={hintId}
             sentence={sentence}
             active={sentence.index === activeIndex}
+            wordIndex={sentence.index === activeIndex ? activeWord : -1}
             matchState={
               sentence.index === currentMatchIndex
                 ? "aktuell"

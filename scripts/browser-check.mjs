@@ -628,12 +628,14 @@ const skipTexts = await page.$$eval("a.skip-link", (nodes) =>
 const skipHidden = await page.evaluate(
   () => getComputedStyle(document.querySelector("a.skip-link")).opacity,
 );
-const skipShown = await page.evaluate(() => {
-  const link = document.querySelector("a.skip-link");
-  link.focus();
-  return getComputedStyle(link).opacity;
-});
-await page.waitForTimeout(250);
+// Der Sprunglink blendet sich weich ein. Die Deckkraft gleich im selben
+// Aufruf zu lesen misst deshalb noch den Anfangswert – erst nach der
+// Überblendung steht der Endwert.
+await page.evaluate(() => document.querySelector("a.skip-link")?.focus());
+await page.waitForTimeout(400);
+const skipShown = await page.evaluate(
+  () => getComputedStyle(document.querySelector("a.skip-link")).opacity,
+);
 record(
   "Sprunglinks werden erst beim Fokussieren sichtbar",
   skipTexts.length === 2 &&

@@ -3,9 +3,10 @@
  *
  * Zwei Beschwerden gaben den Anlass: Die Wortmarkierung stand auf einem anderen
  * Wort als dem gesprochenen, und die Liste sprang beim Abspielen unvermittelt.
- * Geprüft wird deshalb, dass (a) kein einzelnes Wort als „laufend“ markiert
- * wird, (b) die markierte Zeile im sichtbaren Ausschnitt der Liste bleibt und
- * (c) die Liste sich nur in kleinen Schritten bewegt.
+ * Seit die Zeiten an der Aufnahme ausgerichtet werden, ist die Wortmarkierung
+ * wieder da – geprüft wird deshalb, dass (a) genau ein Wort markiert ist und
+ * zwar in der laufenden Zeile, (b) diese Zeile im sichtbaren Ausschnitt der
+ * Liste bleibt und (c) die Liste sich nur in kleinen Schritten bewegt.
  *
  * Voraussetzung: `npm run build` und `npm run start -- -p 3010` laufen.
  *
@@ -82,6 +83,9 @@ const listState = () =>
     const first = document.querySelector('[id^="satz-"]');
     const list = first?.parentElement;
     const active = document.querySelector('[id^="satz-"].bg-petrol-soft');
+    const marked = [...document.querySelectorAll("[id^='satz-'] span[data-wort]")].filter(
+      (span) => span.getAttribute("aria-current") === "true",
+    );
     if (!list) return null;
     const box = list.getBoundingClientRect();
     const row = active?.getBoundingClientRect();
@@ -90,9 +94,12 @@ const listState = () =>
       hoehe: Math.round(box.height),
       aktiv: active?.id ?? null,
       sichtbar: row ? row.top >= box.top - 1 && row.bottom <= box.bottom + 1 : false,
-      karaoke: [...document.querySelectorAll("[id^='satz-'] span[data-wort]")].filter((span) =>
-        span.classList.contains("bg-petrol"),
-      ).length,
+      // Das laufende Wort trägt aria-current; es muss genau eines sein und in
+      // der laufenden Zeile stehen.
+      woerter: marked.length,
+      wortInAktiverZeile:
+        marked.length === 1 && marked[0].closest('[id^="satz-"]')?.id === active?.id,
+      wortText: marked[0]?.textContent?.trim() ?? null,
     };
   });
 
@@ -123,10 +130,23 @@ record(
   unsichtbar.length === 0,
   `${unsichtbar.length} Messungen ausserhalb`,
 );
+/* Genau ein Wort markiert, und zwar in der laufenden Zeile. Zwei Markierungen
+   hiesse, dass zwei Zeilen zugleich als laufend gelten; keine hiesse, dass die
+   Wortzeiten nicht zum Satz passen. */
+const mitWort = withActive.filter((sample) => sample.wortInAktiverZeile);
 record(
-  "Keine wandernde Wortmarkierung",
-  samples.every((sample) => sample?.karaoke === 0),
-  `${samples.reduce((sum, sample) => sum + (sample?.karaoke ?? 0), 0)} markierte Wörter`,
+  "Genau ein Wort in der laufenden Zeile markiert",
+  mitWort.length >= withActive.length - 1,
+  `${mitWort.length} von ${withActive.length} Messungen · zuletzt „${samples.at(-1)?.wortText ?? "–"}“`,
+);
+
+/* Die Markierung muss auch wandern: Steht sie über zwölf Messungen hinweg auf
+   demselben Wort, folgt sie der Wiedergabe nicht. */
+const verschiedeneWoerter = new Set(withActive.map((sample) => `${sample.aktiv}:${sample.wortText}`));
+record(
+  "Wortmarkierung folgt der Wiedergabe",
+  verschiedeneWoerter.size >= Math.min(4, withActive.length),
+  `${verschiedeneWoerter.size} verschiedene Wörter in ${withActive.length} Messungen`,
 );
 
 /* Sprünge: Zwischen zwei Messungen darf sich die Liste höchstens um ihre eigene
