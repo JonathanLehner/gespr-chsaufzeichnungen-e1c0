@@ -7,6 +7,12 @@
     "nodejs_compat",
     "nodejs_compat_populate_process_env"
   ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "gespr-chsaufzeichnungen-e1c0"
+    }
+  ],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"

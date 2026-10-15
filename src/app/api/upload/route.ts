@@ -8,9 +8,9 @@ import {
   wavDurationMs,
 } from "@/lib/audio";
 import { parseFilename } from "@/lib/filename-template";
-import { platformUploadAudio } from "@/lib/platform";
 import { createRecording, invalidateRecordingCache } from "@/lib/recordings";
 import { getTemplateSettings } from "@/lib/settings";
+import { storeFile } from "@/lib/storage";
 import { runPendingJobs } from "@/lib/transcription";
 
 export const runtime = "nodejs";
@@ -120,7 +120,7 @@ export async function POST(request: NextRequest) {
         : null;
 
   try {
-    const uploaded = await platformUploadAudio(bytes);
+    const uploaded = await storeFile(bytes, signature);
     const { created, recording } = await createRecording({
       originalFilename: filename,
       audioUrl: uploaded.url,

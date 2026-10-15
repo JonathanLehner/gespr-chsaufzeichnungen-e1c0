@@ -1,17 +1,63 @@
 import "server-only";
-import { platformDb, PlatformError } from "./platform";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { MongoClient, MongoServerError, type Filter, type UpdateFilter } from "mongodb";
 
 /**
- * Dünne Schicht über der ClawCorp-Plattformdatenbank (MongoDB).
+ * Dünne Schicht über der MongoDB der Anwendung (`MONGODB_URI`).
  *
- * Wichtige Eigenschaften des Endpunkts, an denen sich der Rest der Anwendung
- * ausrichtet:
- *  - Es gibt keine serverseitige Sortierung, Begrenzung oder Projektion.
- *  - `find` liefert höchstens 100 Dokumente.
- *  - Automatisch erzeugte ObjectIds lassen sich nicht wieder abfragen, deshalb
- *    vergibt die Anwendung für jedes Dokument eine eigene String-`_id`.
- *  - Doppelte `_id` erzeugen einen Fehler, was für Idempotenz genutzt wird.
+ * Die Verbindung gehört zur Anfrage, die sie geöffnet hat: Im Worker wird je
+ * Anfrage ein eigener Client angelegt und nur innerhalb dieser Anfrage
+ * wiederverwendet. Ausserhalb des Workers (Skripte, `next build`) gibt es
+ * keinen Anfragekontext, dort genügt ein Client je Prozess.
+ *
+ * Die Anwendung vergibt für jedes Dokument eine eigene String-`_id`. Doppelte
+ * `_id` erzeugen einen Fehler, was für Idempotenz genutzt wird.
  */
+
+type StoredDoc = { _id: string; [field: string]: unknown };
+
+const requestClients = new WeakMap<object, Promise<MongoClient>>();
+let processClient: Promise<MongoClient> | null = null;
+
+function connect(): Promise<MongoClient> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error("MONGODB_URI ist nicht gesetzt.");
+  return new MongoClient(uri, { maxPoolSize: 5 }).connect();
+}
+
+function requestScope(): object | null {
+  try {
+    return getCloudflareContext();
+  } catch {
+    return null;
+  }
+}
+
+async function collectionOf(name: string) {
+  const scope = requestScope();
+  let client: Promise<MongoClient>;
+  if (scope) {
+    client = requestClients.get(scope) ?? connect();
+    requestClients.set(scope, client);
+  } else {
+    client = processClient ??= connect();
+  }
+  try {
+    return (await client).db().collection<StoredDoc>(name);
+  } catch (error) {
+    // Ein fehlgeschlagener Verbindungsaufbau soll nicht für weitere Aufrufe hängen bleiben.
+    if (scope) requestClients.delete(scope);
+    else processClient = null;
+    throw error;
+  }
+}
+
+/** Schliesst die Verbindung eines Skripts, damit der Prozess enden kann. */
+export async function closeDb(): Promise<void> {
+  const client = processClient;
+  processClient = null;
+  if (client) await (await client).close();
+}
 
 export const Collections = {
   users: "users",
@@ -29,21 +75,25 @@ export const Collections = {
 
 export type WithId<T> = T & { _id: string };
 
+/** Obergrenze für Abfragen, deren Aufrufer eine abgeschnittene Antwort erkennen. */
 export const FIND_LIMIT = 100;
 
 export async function findMany<T>(
   collection: string,
   filter: Record<string, unknown> = {},
+  options: { limit?: number } = {},
 ): Promise<WithId<T>[]> {
-  const result = await platformDb<WithId<T>[] | null>({ collection, action: "find", filter });
-  return result ?? [];
+  const cursor = (await collectionOf(collection)).find(filter as Filter<StoredDoc>);
+  if (options.limit) cursor.limit(options.limit);
+  return (await cursor.toArray()) as unknown as WithId<T>[];
 }
 
 export async function findOne<T>(
   collection: string,
   filter: Record<string, unknown>,
 ): Promise<WithId<T> | null> {
-  return platformDb<WithId<T> | null>({ collection, action: "findOne", filter });
+  const doc = await (await collectionOf(collection)).findOne(filter as Filter<StoredDoc>);
+  return doc as unknown as WithId<T> | null;
 }
 
 export async function findById<T>(collection: string, id: string): Promise<WithId<T> | null> {
@@ -55,7 +105,7 @@ export async function countDocuments(
   collection: string,
   filter: Record<string, unknown> = {},
 ): Promise<number> {
-  return platformDb<number>({ collection, action: "countDocuments", filter });
+  return (await collectionOf(collection)).countDocuments(filter as Filter<StoredDoc>);
 }
 
 /** Fügt ein Dokument ein. Liefert `false`, wenn die `_id` bereits existiert. */
@@ -64,10 +114,10 @@ export async function insertUnique(
   document: Record<string, unknown> & { _id: string },
 ): Promise<boolean> {
   try {
-    await platformDb({ collection, action: "insertOne", document });
+    await (await collectionOf(collection)).insertOne(document);
     return true;
   } catch (error) {
-    if (error instanceof PlatformError && error.detail.includes("E11000")) return false;
+    if (error instanceof MongoServerError && error.code === 11000) return false;
     throw error;
   }
 }
@@ -76,7 +126,7 @@ export async function insertOne(
   collection: string,
   document: Record<string, unknown> & { _id: string },
 ): Promise<void> {
-  await platformDb({ collection, action: "insertOne", document });
+  await (await collectionOf(collection)).insertOne(document);
 }
 
 export async function insertMany(
@@ -84,7 +134,7 @@ export async function insertMany(
   documents: (Record<string, unknown> & { _id: string })[],
 ): Promise<void> {
   if (documents.length === 0) return;
-  await platformDb({ collection, action: "insertMany", documents });
+  await (await collectionOf(collection)).insertMany(documents);
 }
 
 /** Aktualisiert ein Dokument und meldet, ob es tatsächlich verändert wurde. */
@@ -93,12 +143,10 @@ export async function updateOne(
   filter: Record<string, unknown>,
   update: Record<string, unknown>,
 ): Promise<{ matched: number; modified: number }> {
-  const result = await platformDb<{ matchedCount: number; modifiedCount: number }>({
-    collection,
-    action: "updateOne",
-    filter,
-    update,
-  });
+  const result = await (await collectionOf(collection)).updateOne(
+    filter as Filter<StoredDoc>,
+    update as UpdateFilter<StoredDoc>,
+  );
   return { matched: result.matchedCount, modified: result.modifiedCount };
 }
 
@@ -107,12 +155,10 @@ export async function updateMany(
   filter: Record<string, unknown>,
   update: Record<string, unknown>,
 ): Promise<{ matched: number; modified: number }> {
-  const result = await platformDb<{ matchedCount: number; modifiedCount: number }>({
-    collection,
-    action: "updateMany",
-    filter,
-    update,
-  });
+  const result = await (await collectionOf(collection)).updateMany(
+    filter as Filter<StoredDoc>,
+    update as UpdateFilter<StoredDoc>,
+  );
   return { matched: result.matchedCount, modified: result.modifiedCount };
 }
 
@@ -155,11 +201,7 @@ export async function readCounter(name: string): Promise<number> {
 }
 
 export async function deleteById(collection: string, id: string): Promise<number> {
-  const result = await platformDb<{ deletedCount: number }>({
-    collection,
-    action: "deleteOne",
-    filter: { _id: id },
-  });
+  const result = await (await collectionOf(collection)).deleteOne({ _id: id } as Filter<StoredDoc>);
   return result.deletedCount;
 }
 
@@ -167,10 +209,6 @@ export async function deleteMany(
   collection: string,
   filter: Record<string, unknown>,
 ): Promise<number> {
-  const result = await platformDb<{ deletedCount: number }>({
-    collection,
-    action: "deleteMany",
-    filter,
-  });
+  const result = await (await collectionOf(collection)).deleteMany(filter as Filter<StoredDoc>);
   return result.deletedCount;
 }

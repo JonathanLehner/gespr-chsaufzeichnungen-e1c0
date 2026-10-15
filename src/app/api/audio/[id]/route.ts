@@ -2,11 +2,13 @@ import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { verifyPlaybackToken } from "@/lib/audio";
 import { getRecording } from "@/lib/recordings";
+import { storageKeyOf, storedFileResponse } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
 /**
- * Liefert die Audiodatei aus dem Objektspeicher aus. Die Ablage-URL bleibt
+ * Liefert die Audiodatei aus dem Objektspeicher aus (R2, bei älteren
+ * Datensätzen assets.clawcorp.ai). Die Ablage-URL bleibt
  * dadurch intern, der Zugriff erfordert eine gültige Sitzung und ein
  * kurzlebiges signiertes Token. Bereichsanfragen werden durchgereicht, damit
  * im Player gesprungen werden kann.
@@ -30,6 +32,17 @@ export async function GET(
   if (!recording) return new Response("Aufnahme nicht gefunden.", { status: 404 });
 
   const range = request.headers.get("range");
+  const disposition = `inline; filename="${encodeURIComponent(recording.originalFilename)}"`;
+  const key = storageKeyOf(recording.audioUrl);
+  if (key) {
+    const stored = await storedFileResponse(key, {
+      range,
+      contentType: recording.mimeType,
+      headers: { "cache-control": "private, max-age=3600", "content-disposition": disposition },
+    });
+    return stored ?? new Response("Die Audiodatei konnte nicht geladen werden.", { status: 502 });
+  }
+
   const upstream = await fetch(recording.audioUrl, {
     headers: range ? { Range: range } : undefined,
     cache: "no-store",
@@ -42,10 +55,7 @@ export async function GET(
   headers.set("content-type", recording.mimeType);
   headers.set("accept-ranges", "bytes");
   headers.set("cache-control", "private, max-age=3600");
-  headers.set(
-    "content-disposition",
-    `inline; filename="${encodeURIComponent(recording.originalFilename)}"`,
-  );
+  headers.set("content-disposition", disposition);
   const length = upstream.headers.get("content-length");
   if (length) headers.set("content-length", length);
   const contentRange = upstream.headers.get("content-range");

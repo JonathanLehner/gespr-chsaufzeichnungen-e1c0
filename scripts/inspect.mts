@@ -1,5 +1,5 @@
 /** Zeigt den Zustand der Daten für eine Stichprobe an. */
-import { Collections, findMany } from "../src/lib/db";
+import { Collections, findMany, closeDb } from "../src/lib/db";
 import { loadTranscript } from "../src/lib/transcription";
 import type { Recording, TranscriptIndexDoc } from "../src/lib/types";
 
@@ -35,3 +35,4 @@ const suche = await findMany<TranscriptIndexDoc>(Collections.transcriptIndex, {
   fullText: { $regex: "Nebenkosten", $options: "i" },
 });
 console.log(`\nVolltextsuche "Nebenkosten": ${suche.length} Aufnahme(n)`);
+await closeDb();

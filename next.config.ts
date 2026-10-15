@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { NextConfig } from "next";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
 const nextConfig: NextConfig = {
   // Das Projektverzeichnis ist die Wurzel; ausserhalb liegende Lockfiles
@@ -8,3 +9,6 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+// Stellt in `next dev` die Bindings aus wrangler.jsonc bereit (lokaler R2-Bucket).
+initOpenNextCloudflareForDev();

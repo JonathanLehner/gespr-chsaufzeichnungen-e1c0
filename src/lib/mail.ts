@@ -1,6 +1,6 @@
 import "server-only";
-import { headers } from "next/headers";
 import { randomUUID } from "node:crypto";
+import { appBaseUrl } from "./app-url";
 import { Collections, insertOne } from "./db";
 import { createToken } from "./auth";
 import { sendMail, type MailDelivery } from "./mailer";
@@ -25,27 +25,6 @@ export type IssuedAuthLink = {
   delivery: MailDelivery;
 };
 
-/**
- * Basis für Links in E-Mails. `APP_BASE_URL` hat Vorrang, sonst wird der Host
- * der laufenden Anfrage verwendet. Der Aufruf erfolgt ausschliesslich aus
- * Server Actions, die ohnehin pro Anfrage laufen – statisch vorgerenderte
- * Seiten bleiben davon unberührt.
- */
-async function baseUrl(): Promise<string> {
-  const configured = process.env.APP_BASE_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, "");
-  try {
-    const store = await headers();
-    const host = store.get("x-forwarded-host") ?? store.get("host");
-    if (!host) return "";
-    const proto =
-      store.get("x-forwarded-proto") ?? (/^(localhost|127\.0\.0\.1)/.test(host) ? "http" : "https");
-    return `${proto}://${host}`;
-  } catch {
-    return "";
-  }
-}
-
 export async function issueAuthLink(
   email: string,
   kind: AuthMailKind,
@@ -65,7 +44,7 @@ export async function issueAuthLink(
   });
 
   const path = `${kind === "bestaetigung" ? "/bestaetigen" : "/passwort-neu"}?token=${token}`;
-  const base = await baseUrl();
+  const base = await appBaseUrl();
   const url = base ? `${base}${path}` : path;
   const subject =
     kind === "bestaetigung" ? "Bitte bestätigen Sie Ihre E-Mail-Adresse" : "Passwort zurücksetzen";

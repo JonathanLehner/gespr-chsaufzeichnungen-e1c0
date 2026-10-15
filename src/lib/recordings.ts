@@ -364,7 +364,9 @@ export async function listAllComments(limit = 40): Promise<CommentOverview> {
     chunks.push(recordings.slice(index, index + COMMENT_SCAN_CHUNK).map((row) => row._id));
   }
   const pages = await Promise.all(
-    chunks.map((ids) => findMany<Comment>(Collections.comments, { recordingId: { $in: ids } })),
+    chunks.map((ids) =>
+      findMany<Comment>(Collections.comments, { recordingId: { $in: ids } }, { limit: FIND_LIMIT }),
+    ),
   );
   const byRecording = new Map(recordings.map((row) => [row._id, row]));
   const all = pages.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt));

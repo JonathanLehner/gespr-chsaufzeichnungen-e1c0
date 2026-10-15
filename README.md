@@ -62,7 +62,8 @@ npm run start    # Produktionsserver
 Erforderliche Variablen in `.env.local` (nicht im Repository enthalten):
 
 ```
-CLAWCORP_API_KEY=...   # ClawCorp-Plattform: Datenbank, Gemini, Objektspeicher
+MONGODB_URI=...        # MongoDB der Anwendung
+CLAWCORP_API_KEY=...   # ClawCorp-Plattform: Gemini (Transkription)
 AUTH_SECRET=...        # Signaturschlüssel für Wiedergabe-Tokens
 ```
 
@@ -77,7 +78,8 @@ MAIL_FROM_NAME=Gesprächsaufzeichnungen Immotrust AG
 MAIL_REPLY_TO=...               # optional
 MAIL_MAILGUN_DOMAIN=...         # nur für Mailgun
 MAIL_MAILGUN_REGION=eu          # nur für Mailgun, eu oder us
-APP_BASE_URL=https://…          # Basis der Links in den E-Mails; sonst der Host der Anfrage
+MAIL_POSTMARK_STREAM=outbound   # nur für Postmark
+APP_BASE_URL=https://…          # Basis der Links in E-Mails und der Datei-Adressen; sonst der Host der Anfrage
 ```
 
 ## Konten
@@ -96,6 +98,7 @@ werden keine Beispieldaten erzeugt.
 | `src/app/actions` | Server Actions für Anmeldung, Aufnahmen, Profil und Administration |
 | `src/app/api/upload` | Entgegennahme der Audiodateien inklusive Signaturprüfung |
 | `src/app/api/audio/[id]` | Ausliefern der Aufnahme mit Bereichsanfragen und signiertem Token |
+| `src/app/api/dateien/[key]` | Ausliefern abgelegter Dateien aus dem R2-Bucket |
 | `src/lib` | Datenzugriff, Authentifizierung, E-Mail-Versand, Dateinamensanalyse, Transkription |
 | `src/lib/audio-split.ts`, `src/lib/audio-envelope.ts` | verlustfreies Zerlegen der Aufnahme und ihr Lautstärkeverlauf (WAV direkt, MP3 über `global_gain` der Seiteninformation) |
 | `src/lib/forced-alignment.ts`, `src/lib/syllables.ts` | Ausrichtung des Transkripts an der Aufnahme; Silbenzahl über `hypher` mit deutschen Trennmustern |
@@ -116,15 +119,10 @@ node scripts/check-einstellungen.mjs   # Einstellungen und Ändern des eigenen N
 # ohne laufenden Server, direkt gegen Datenschicht und Transkriptionsdienst
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-audio-split.mts
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-namensabgleich.mts
-npx tsx --env-file=.env.local --conditions=react-server scripts/check-transkription-abschnitte.mts
 
 # Ausrichtung der Zeiten an der Aufnahme
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-ausrichtung.mts
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-mp3-verlauf.mts
-
-# Gegenprobe zur Ausrichtung: schneidet Sätze an den ausgerichteten Zeiten aus
-# und lässt nur diesen Ausschnitt transkribieren (kostet Aufrufe des Dienstes)
-npx tsx --env-file=.env.local --conditions=react-server scripts/check-ausrichtung-hoerprobe.mts
 
 # einmalige Nachbesserung: richtet Transkripte aus der Zeit vor der Ausrichtung
 # nachträglich aus, ohne sie neu erzeugen zu lassen
@@ -163,9 +161,8 @@ wieder eingesetzt.
 Bewertung an und stellt sicher, dass eine Namensänderung alle drei Kopien mitzieht, den Anrufernamen
 aus dem Dateinamen aber unberührt lässt. `check-audio-split.mts` rechnet nach, dass die Abschnitte
 einer langen Aufnahme lückenlos aneinander anschliessen und zusammen wieder das Original ergeben.
-`check-transkription-abschnitte.mts` lässt eine lange und eine stille Aufnahme wirklich
-transkribieren und prüft aufsteigende Zeitstempel über die Abschnittsgrenzen hinweg sowie den
-Abschluss `ohne_sprache`. Alle drei räumen ihre Daten selbst wieder ab.
+Beide räumen ihre Daten selbst wieder ab. Die `.mts`-Skripte lesen `MONGODB_URI` direkt; Audiodateien
+holen sie über ihre Adresse `/api/dateien/…` von der laufenden Anwendung.
 
 Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.
 
@@ -180,24 +177,25 @@ npx wrangler dev --port 8788        # Worker lokal prüfen (Variablen aus .dev.v
 npx wrangler deploy                 # Ausliefern
 ```
 
-`CLAWCORP_API_KEY` und `AUTH_SECRET` liegen als Worker-Secrets (`npx wrangler secret put NAME`),
+`MONGODB_URI`, `CLAWCORP_API_KEY` und `AUTH_SECRET` liegen als Worker-Secrets (`npx wrangler secret put NAME`),
 lokal in `.dev.vars`. Für den E-Mail-Versand kommt `MAIL_API_KEY` auf demselben Weg dazu, sofern der
 Schlüssel nicht im Admin-Dashboard hinterlegt wird.
 
 ## Technische Entscheidungen
 
-- **Datenhaltung**: ClawCorp-Plattformdatenbank (MongoDB) über den HTTP-Endpunkt. Der Endpunkt
-  sortiert und begrenzt nicht serverseitig und liefert höchstens 100 Dokumente pro Abfrage. Jede
-  Aufnahme erhält deshalb beim Anlegen ein Lesefenster (`bucket`, je 50 Datensätze); die Übersicht
-  liest diese Fenster vollständig ein und filtert, sortiert und paginiert anschliessend im Server.
-- **Eigene Dokument-IDs**: Automatisch erzeugte ObjectIds lassen sich über den Endpunkt nicht wieder
-  abfragen. Alle Dokumente verwenden deshalb sprechende String-IDs. Der Schlüssel einer Aufnahme
+- **Datenhaltung**: eigene MongoDB über den offiziellen Treiber (`MONGODB_URI`). Im Worker öffnet
+  jede Anfrage ihren eigenen Client (höchstens 5 Verbindungen). Jede Aufnahme erhält beim Anlegen ein
+  Lesefenster (`bucket`, je 50 Datensätze); die Übersicht liest diese Fenster vollständig ein und
+  filtert, sortiert und paginiert anschliessend im Server.
+- **Eigene Dokument-IDs**: Alle Dokumente verwenden sprechende String-IDs. Der Schlüssel einer Aufnahme
   wird aus Dateiname und Dateigrösse abgeleitet, wodurch ein wiederholter Upload derselben Datei
   keinen zweiten Datensatz erzeugt.
-- **Audioablage**: Die Dateien liegen im S3-Speicher der ClawCorp-Plattform. Da deren Upload nur
-  Medien-Container annimmt, werden die unveränderten Bytes darüber abgelegt; ausgeliefert werden sie
-  über `/api/audio/[id]` mit dem korrekten MIME-Typ, Bereichsanfragen und einem signierten,
-  kurzlebigen Token. Die Ablage-URL bleibt dadurch intern.
+- **Audioablage**: Die Dateien liegen im R2-Bucket der Anwendung (Binding `BUCKET` in
+  `wrangler.jsonc`) unter einem zufälligen Schlüssel und sind über `/api/dateien/[key]` abrufbar,
+  damit der Transkriptionsdienst sie holen kann. Diese Adresse muss deshalb öffentlich erreichbar
+  sein (`APP_BASE_URL` oder Host der Anfrage). Ältere Aufnahmen verweisen weiterhin auf
+  assets.clawcorp.ai. In der Oberfläche wird über `/api/audio/[id]` mit dem korrekten MIME-Typ,
+  Bereichsanfragen und einem signierten, kurzlebigen Token ausgeliefert.
 - **Transkription**: Der Gemini-Endpunkt begrenzt Anfragen auf 200 KB, weshalb die Aufnahme nicht
   eingebettet, sondern als Datei-Referenz übergeben wird. Die Antwort wird normalisiert
   (aufsteigende Zeiten, Wortzerlegung als Rückfallebene) und wegen der Grössenbegrenzung der

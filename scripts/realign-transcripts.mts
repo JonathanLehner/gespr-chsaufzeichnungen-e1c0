@@ -8,7 +8,7 @@
  *
  * Aufruf: npx tsx --env-file=.env.local --conditions=react-server scripts/realign-transcripts.mts [--alle]
  */
-import { Collections, findMany } from "../src/lib/db";
+import { Collections, closeDb, findMany } from "../src/lib/db";
 import { realignRecording } from "../src/lib/transcription";
 import type { Recording } from "../src/lib/types";
 
@@ -41,4 +41,5 @@ for (const recording of recordings) {
 }
 
 console.log(`\n${done} ausgerichtet, ${failed} nicht.`);
+await closeDb();
 if (failed > 0) process.exit(1);

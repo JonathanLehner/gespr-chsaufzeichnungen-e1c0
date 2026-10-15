@@ -64,33 +64,6 @@ export class PlatformError extends Error {
   }
 }
 
-/* ---------------------------------------------------------------- Datenbank */
-
-export type DbAction =
-  | "find"
-  | "findOne"
-  | "insertOne"
-  | "insertMany"
-  | "updateOne"
-  | "updateMany"
-  | "deleteOne"
-  | "deleteMany"
-  | "countDocuments";
-
-type DbRequest = {
-  collection: string;
-  action: DbAction;
-  filter?: Record<string, unknown>;
-  document?: Record<string, unknown>;
-  documents?: Record<string, unknown>[];
-  update?: Record<string, unknown>;
-};
-
-export async function platformDb<T>(request: DbRequest): Promise<T> {
-  const { result } = await post<{ result: T }>("/db", request);
-  return result;
-}
-
 /* ------------------------------------------------------------------ Gemini */
 
 export type GeminiPart =
@@ -108,7 +81,7 @@ export type GeminiRequest = {
 /**
  * Grösse, die der Endpunkt für eine Anfrage annimmt. Audiodaten passen deshalb
  * nicht als `inlineData` in die Anfrage – sie werden vorher abgelegt und über
- * `fileData` referenziert (siehe `platformUploadAudio`).
+ * `fileData` referenziert (siehe `storeFile` in `storage.ts`).
  */
 export const GEMINI_MAX_REQUEST_BYTES = 200 * 1024;
 
@@ -123,41 +96,4 @@ export async function platformGemini(
   options: { timeoutMs?: number } = {},
 ): Promise<GeminiResponse> {
   return post<GeminiResponse>("/gemini", request, "application/json", options.timeoutMs);
-}
-
-/* ------------------------------------------------------------- Dateiablage */
-
-export type UploadResult = { url: string; bytes: number };
-
-/**
- * Legt Rohbytes im ClawCorp-S3-Speicher ab und liefert die dauerhafte URL.
- *
- * Die Ablage nimmt Audio-MIME-Typen nicht direkt entgegen, deshalb werden die
- * unveränderten Bytes als Medien-Container übergeben. Der tatsächliche Typ der
- * Aufnahme steht im Datensatz und wird von /api/audio beim Ausliefern gesetzt.
- */
-export async function platformUploadAudio(
-  bytes: Uint8Array | Buffer,
-  options: { timeoutMs?: number } = {},
-): Promise<UploadResult> {
-  return post<UploadResult>("/upload", bytes, "video/mp4", options.timeoutMs);
-}
-
-/** Lädt eine zuvor abgelegte Datei wieder als Rohbytes. */
-export async function platformFetchBytes(
-  url: string,
-  options: { timeoutMs?: number } = {},
-): Promise<Uint8Array> {
-  const res = await fetch(url, {
-    cache: "no-store",
-    signal: options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined,
-  });
-  if (!res.ok) {
-    throw new PlatformError(
-      `Die Audiodatei konnte nicht gelesen werden (${res.status}).`,
-      res.status,
-      String(res.status),
-    );
-  }
-  return new Uint8Array(await res.arrayBuffer());
 }

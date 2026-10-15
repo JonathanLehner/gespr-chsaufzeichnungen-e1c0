@@ -10,12 +10,8 @@ import {
 } from "./db";
 import { measureDurationMs, splitAudio, type AudioChunk } from "./audio-split";
 import { alignTranscript } from "./forced-alignment";
-import {
-  platformFetchBytes,
-  platformGemini,
-  platformUploadAudio,
-  type GeminiPart,
-} from "./platform";
+import { platformGemini, type GeminiPart } from "./platform";
+import { readFileBytes, storeFile } from "./storage";
 import { invalidateRecordingCache } from "./recordings";
 import type {
   AlignmentSource,
@@ -375,7 +371,7 @@ export async function realignRecording(
   const segments = await loadTranscript(recordingId);
   if (segments.length === 0) return { ok: false, message: "Kein Transkript vorhanden." };
 
-  const bytes = await platformFetchBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
+  const bytes = await readFileBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
   const aligned = alignTranscript(segments, bytes, recording.mimeType, {
     gaps: recording.transcriptionGaps ?? [],
   });
@@ -536,9 +532,7 @@ async function transcribeChunks(
           // Adresse an. Eine Wiederholung mit unverändertem Verweis lief in der
           // Messung dreimal in dieselbe Zeitüberschreitung, ein neuer Verweis
           // dagegen durch – das Ablegen kostet dabei nur rund eine Sekunde.
-          const uploaded = await platformUploadAudio(chunk.toBytes(), {
-            timeoutMs: TRANSFER_TIMEOUT_MS,
-          });
+          const uploaded = await storeFile(chunk.toBytes(), recording.mimeType);
           const audio: GeminiPart = {
             fileData: { fileUri: uploaded.url, mimeType: recording.mimeType },
           };
@@ -597,7 +591,7 @@ type RunResult = NormalizedTranscript & {
 async function runTranscription(recording: Recording): Promise<RunResult> {
   let bytes: Uint8Array | null = null;
   try {
-    bytes = await platformFetchBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
+    bytes = await readFileBytes(recording.audioUrl, { timeoutMs: TRANSFER_TIMEOUT_MS });
   } catch (error) {
     console.warn(
       `[transkription] ${recording._id}: Audiodatei nicht abrufbar – ` +

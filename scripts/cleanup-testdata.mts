@@ -4,7 +4,7 @@
  *
  *   npx tsx --env-file=.env.local --conditions=react-server scripts/cleanup-testdata.mts
  */
-import { Collections, deleteMany, findMany } from "../src/lib/db";
+import { Collections, deleteMany, findMany, closeDb } from "../src/lib/db";
 import { hardDeleteRecording, refreshRatingSummary } from "../src/lib/recordings";
 import type { Comment, Rating, Recording, User } from "../src/lib/types";
 
@@ -53,3 +53,4 @@ for (const user of users) {
 }
 
 console.log("Aufräumen abgeschlossen.");
+await closeDb();

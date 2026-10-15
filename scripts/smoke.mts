@@ -1,5 +1,5 @@
 /** Kurzer Funktionstest der Datenschicht und der Dateinamensanalyse. */
-import { countDocuments, Collections } from "../src/lib/db";
+import { countDocuments, Collections, closeDb } from "../src/lib/db";
 import { DEFAULT_TEMPLATE, DEFAULT_TEMPLATE_EXAMPLE, parseFilename, validateTemplate } from "../src/lib/filename-template";
 import { formatDateTimeWithSeconds } from "../src/lib/time";
 
@@ -14,3 +14,4 @@ console.log("Abweichende Vorlage:", parseFilename(
 ));
 console.log("Unlesbar:", parseFilename("Aufnahme_ohne_Muster.wav", DEFAULT_TEMPLATE));
 console.log("Aufnahmen in der Datenbank:", await countDocuments(Collections.recordings, {}));
+await closeDb();
