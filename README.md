@@ -57,6 +57,7 @@ npm install
 npm run dev      # Entwicklung
 npm run build    # Produktionsbuild
 npm run start    # Produktionsserver
+npm test         # Tests
 ```
 
 Erforderliche Variablen in `.env.local` (nicht im Repository enthalten):
@@ -66,6 +67,9 @@ MONGODB_URI=...        # MongoDB der Anwendung
 CLAWCORP_API_KEY=...   # ClawCorp-Plattform: Gemini (Transkription)
 AUTH_SECRET=...        # Signaturschlüssel für Wiedergabe-Tokens
 ```
+
+`AUTH_SECRET` hat keinen Standardwert. Fehlt die Variable, bricht die Wiedergabe mit einer Fehlermeldung ab.
+Einen Wert erzeugt z. B. `openssl rand -base64 32`.
 
 Optional für den E-Mail-Versand. Dieselben Werte lassen sich im Admin-Dashboard hinterlegen; was dort
 eingetragen ist, hat Vorrang. Ist beides leer, werden E-Mails nur protokolliert:
