@@ -66,7 +66,11 @@ export function wavDurationMs(bytes: Uint8Array): number | null {
 /* ------------------------------------------------- Kurzlebige Wiedergabe-URLs */
 
 function secret(): string {
-  return process.env.AUTH_SECRET ?? "entwicklungs-geheimnis";
+  const value = process.env.AUTH_SECRET;
+  if (!value) {
+    throw new Error("AUTH_SECRET ist nicht gesetzt. Wiedergabe-Links können nicht signiert werden.");
+  }
+  return value;
 }
 
 const PLAYBACK_TTL_MS = 60 * 60 * 1000;

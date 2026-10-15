@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "tsx --conditions=react-server --test scripts/check-wiedergabe-token.mts"
   },
   "dependencies": {
     "hyphenation.de": "^0.2.1",
