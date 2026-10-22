@@ -28,7 +28,7 @@ export function Wordmark({ compact = false }: { compact?: boolean }) {
     <span className="inline-flex items-center gap-2.5">
       <Logo size={32} />
       <span className="leading-tight">
-        <span className="block text-[13px] font-semibold tracking-tight text-ink">Immotrust AG</span>
+        <span className="block whitespace-nowrap text-[13px] font-semibold tracking-tight text-ink">Immotrust AG</span>
         {!compact && (
           // Auf schmalen Viewports würde die Unterzeile gegen die Kopfzeilen-Schaltflächen laufen.
           <span className="hidden text-[12px] text-ink-faint sm:block">Gesprächsaufzeichnungen</span>
@@ -42,14 +42,19 @@ export function PublicHeader() {
   return (
     <header className="border-b border-line bg-surface">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
-        <Link prefetch={false} href="/" className="rounded-sm">
+        <Link prefetch={false} href="/" className="shrink-0 rounded-sm">
           <Wordmark />
         </Link>
         <nav className="flex items-center gap-2 text-[13px]">
-          <Link prefetch={false} href="/registrieren" className="btn btn-secondary">
+          {/* Auf schmalen Viewports bietet der Hero „Konto erstellen“ direkt darunter an. */}
+          <Link
+            prefetch={false}
+            href="/registrieren"
+            className="btn btn-secondary hidden min-h-11 whitespace-nowrap sm:inline-flex"
+          >
             Konto erstellen
           </Link>
-          <Link prefetch={false} href="/anmelden" className="btn btn-primary">
+          <Link prefetch={false} href="/anmelden" className="btn btn-primary min-h-11 whitespace-nowrap">
             Anmelden
           </Link>
         </nav>

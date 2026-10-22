@@ -48,10 +48,7 @@ export default function Home() {
         <section className="border-b border-line bg-surface">
           <div className="mx-auto grid max-w-6xl gap-10 px-5 py-14 lg:grid-cols-[1fr_620px] lg:items-center">
             <div>
-              <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-petrol">
-                Interne Anwendung
-              </p>
-              <h1 className="mt-3 text-4xl font-semibold leading-[1.1] tracking-tight text-ink">
+              <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-ink">
                 Jedes Verkaufsgespräch auffindbar, nachhörbar und bewertet.
               </h1>
               <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-ink-soft">
@@ -60,10 +57,10 @@ export default function Home() {
                 Verkaufsteam gemeinsam nutzbar.
               </p>
               <div className="mt-7 flex flex-wrap gap-3">
-                <Link prefetch={false} href="/anmelden" className="btn btn-primary">
+                <Link prefetch={false} href="/anmelden" className="btn btn-primary min-h-11">
                   Zur Anmeldung
                 </Link>
-                <Link prefetch={false} href="/registrieren" className="btn btn-secondary">
+                <Link prefetch={false} href="/registrieren" className="btn btn-secondary min-h-11">
                   Konto erstellen
                 </Link>
               </div>
