@@ -14,6 +14,7 @@ import {
   DeletionFlagButton,
   DeletionFlagProvider,
 } from "@/components/deletion-flag";
+import { DEFAULT_TEMPLATE_EXAMPLE } from "@/lib/filename-template";
 import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
 import { TranscriptionWatcher, type WatchedRecording } from "@/components/transcription-watcher";
 import type { TranscriptionStatus } from "@/lib/types";
@@ -107,6 +108,43 @@ export default async function AufnahmenPage({
   // Fällige Wiederholungen anstossen, ohne die Antwort zu verzögern.
   after(() => sweepQueue());
 
+  if (result.totalAll === 0) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">Aufnahmen</h1>
+        <section className="card px-5 py-12 text-center" aria-labelledby="leer-titel">
+          <h2 id="leer-titel" className="text-[15px] font-semibold text-ink">
+            Noch keine Aufnahmen
+          </h2>
+          <p className="mx-auto mt-2 max-w-[60ch] text-[13px] leading-relaxed text-ink-soft">
+            Hochgeladene Gespräche werden automatisch auf Deutsch transkribiert und sind danach
+            durchsuchbar.
+          </p>
+          <p className="mt-4 text-[12px] text-ink-soft">Erwarteter Dateiname, zum Beispiel:</p>
+          <code className="mt-1 inline-block rounded-sm bg-canvas px-2 py-1 font-mono text-[12px] text-ink">
+            {/* Umbruch nur nach den Unterstrichen, nicht mitten in einer Nummer. */}
+            {DEFAULT_TEMPLATE_EXAMPLE.split("_").map((part, index) => (
+              <Fragment key={index}>
+                {index > 0 && (
+                  <>
+                    _<wbr />
+                  </>
+                )}
+                {part}
+              </Fragment>
+            ))}
+          </code>
+          <div className="mt-6">
+            <Link href="/upload" className="btn btn-primary">
+              Aufnahmen hochladen
+            </Link>
+          </div>
+        </section>
+        <p className="text-[12px] text-ink-faint">Angemeldet als {user.email}.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -149,9 +187,10 @@ export default async function AufnahmenPage({
               {result.rows.length === 0 && (
                 <tr>
                   <td className="td text-center text-ink-soft" colSpan={10} data-cell="leer">
-                    {result.totalAll === 0
-                      ? "Es sind noch keine Aufnahmen vorhanden. Laden Sie die ersten Gesprächsaufzeichnungen hoch."
-                      : "Keine Aufnahme entspricht den gewählten Filtern."}
+                    Keine Aufnahme entspricht den gewählten Filtern.{" "}
+                    <Link href="/aufnahmen" className="font-semibold text-petrol hover:underline">
+                      Filter zurücksetzen
+                    </Link>
                   </td>
                 </tr>
               )}
@@ -325,8 +364,7 @@ export default async function AufnahmenPage({
       )}
 
       <p className="text-[12px] text-ink-faint">
-        Angemeldet als {user.email}. Alle nicht endgültig gelöschten Aufnahmen sind für sämtliche
-        Mitarbeitenden sichtbar.
+        Angemeldet als {user.email}.
       </p>
     </div>
   );
