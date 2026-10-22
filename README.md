@@ -176,6 +176,15 @@ Dazu: Kopf- und Fusslogo beginnen auf derselben x-Position, bei 390px keine Anfr
 
 Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.
 
+`create-qa-user.mts` legt das QA-Konto für Staging an (E-Mail bestätigt, Rolle „user“) oder
+aktualisiert es. Es liest `STAGING_MONGODB_URI`, `QA_USER_EMAIL` und `QA_USER_PASSWORD` nur aus der
+Umgebung, nicht aus `.env.local`, und gehört nie gegen die Produktionsdatenbank:
+
+```bash
+STAGING_MONGODB_URI=... QA_USER_EMAIL=... QA_USER_PASSWORD=... \
+  npx tsx --conditions=react-server scripts/create-qa-user.mts
+```
+
 ## Auslieferung
 
 Die Anwendung läuft als Cloudflare Worker (`@opennextjs/cloudflare`, Konfiguration in
