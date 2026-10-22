@@ -119,6 +119,7 @@ PRUEF_PASSWORT=… node scripts/check-tastatur.mjs  # Tabulator-Reihenfolge und 
 node scripts/logo-check.mjs      # Bildmarke, Icons und E-Mail-Validierung
 node scripts/perf-check.mjs      # LCP, CLS, Blockierzeit und Bytes, mobil und Desktop
 node scripts/check-einstellungen.mjs   # Einstellungen und Ändern des eigenen Namens
+node scripts/check-umbruch.mjs     # kein Absatz endet mit einem einzelnen Wort (Startseite, /bestaetigen)
 
 # ohne laufenden Server, direkt gegen Datenschicht und Transkriptionsdienst
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-audio-split.mts
