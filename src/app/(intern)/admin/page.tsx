@@ -119,7 +119,7 @@ export default async function AdminPage() {
             <p className="text-2xl font-semibold tabular-nums text-ink">
               {metric.value.toLocaleString("de-CH")}
             </p>
-            <p className="mt-0.5 text-[11.5px] leading-snug text-ink-faint">{metric.label}</p>
+            <p className="mt-0.5 text-[12px] leading-snug text-ink-faint">{metric.label}</p>
           </div>
         ))}
       </section>
@@ -221,7 +221,7 @@ export default async function AdminPage() {
                       <Link href={`/aufnahmen/${row._id}`} className="text-petrol hover:underline">
                         {row.callerName}
                       </Link>
-                      <span className="mt-0.5 block font-mono text-[11px] text-ink-faint">
+                      <span className="mt-0.5 block font-mono text-[12px] text-ink-faint">
                         {row.originalFilename}
                       </span>
                     </td>
@@ -269,19 +269,19 @@ export default async function AdminPage() {
                 <li key={comment._id} className="rounded-[4px] border border-line bg-canvas/60 p-3">
                   <div className="flex flex-wrap items-baseline gap-2 wrap-anywhere">
                     <span className="text-[13px] font-semibold text-ink">{comment.authorName}</span>
-                    <span className="font-mono text-[11px] text-ink-faint">
+                    <span className="font-mono text-[12px] text-ink-faint">
                       {comment.authorEmail}
                     </span>
-                    <span className="text-[11px] text-ink-faint">
+                    <span className="text-[12px] text-ink-faint">
                       {formatDateTimeWithSeconds(comment.createdAt)}
                     </span>
                     {comment.editedAt && (
-                      <span className="text-[11px] italic text-ink-faint">
+                      <span className="text-[12px] italic text-ink-faint">
                         bearbeitet am {formatDateTimeWithSeconds(comment.editedAt)}
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 text-[11.5px] text-ink-faint wrap-anywhere">
+                  <p className="mt-1 text-[12px] text-ink-faint wrap-anywhere">
                     zu{" "}
                     <Link
                       href={`/aufnahmen/${comment.recordingId}`}
@@ -386,7 +386,7 @@ export default async function AdminPage() {
                   {mail.kind === "bestaetigung" ? "E-Mail-Bestätigung" : "Passwort zurücksetzen"}{" "}
                   <DeliveryBadge status={mail.deliveryStatus} />
                 </p>
-                <p className="text-[11px] text-ink-faint">
+                <p className="text-[12px] text-ink-faint">
                   erzeugt {formatDateTimeWithSeconds(mail.createdAt)} · gültig bis{" "}
                   {formatDateTimeWithSeconds(mail.expiresAt)}
                   {mail.deliveryProvider && mail.deliveryProvider !== "protokoll"
@@ -405,7 +405,7 @@ export default async function AdminPage() {
                     {mail.link}
                   </Link>
                 ) : (
-                  <p className="mt-0.5 text-[11px] text-ink-faint">
+                  <p className="mt-0.5 text-[12px] text-ink-faint">
                     Link aus Sicherheitsgründen ausgeblendet.
                   </p>
                 )}

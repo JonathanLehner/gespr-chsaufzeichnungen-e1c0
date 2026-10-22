@@ -108,7 +108,7 @@ export function RatingPanel({
                   )}
                 </span>
                 <span className="flex items-baseline gap-2">
-                  <span className="text-[11px] text-ink-faint">
+                  <span className="text-[12px] text-ink-faint">
                     {formatDateTimeWithSeconds(rating.updatedAt)}
                   </span>
                   <strong className="w-10 text-right text-[13px] text-ink">{rating.score}/10</strong>

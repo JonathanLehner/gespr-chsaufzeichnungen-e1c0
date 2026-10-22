@@ -4,7 +4,7 @@ description: Interne Anwendung zum Ablegen, Transkribieren, Durchsuchen und Bewe
 colors:
   ink: "#101a24"
   ink-soft: "#4a5a6a"
-  ink-faint: "#64717e"
+  ink-faint: "#5f6d7b"
   line: "#dde3ea"
   line-strong: "#c3ccd6"
   surface: "#ffffff"
@@ -60,7 +60,7 @@ Cool, desaturated neutrals carrying a single deep petrol accent and a four-part 
 - **Petrol** (#0e5567): primary buttons, ghost buttons, links, focus outline, active nav text. **Petrol Dark** (#0a4150) is its hover. **Petrol Mist** (#e4eef1) backs active nav items, the Superuser tag, ghost hover and `notice-info`.
 
 ### Neutral
-- **Ink** (#101a24): headings and primary text. **Ink Soft** (#4a5a6a): body copy, labels, table headers. **Ink Faint** (#64717e): metadata, footers, placeholders, empty-value dashes; darkened to pass WCAG AA on white and canvas.
+- **Ink** (#101a24): headings and primary text. **Ink Soft** (#4a5a6a): body copy, labels, table headers. **Ink Faint** (#5f6d7b): metadata, footers, placeholders, empty-value dashes; darkened to pass WCAG AA on white and canvas.
 - **Line** (#dde3ea): every card border, divider and table rule. **Line Strong** (#c3ccd6): field and secondary-button borders.
 - **Surface** (#ffffff): cards, headers, footers. **Canvas** (#f2f4f7): page background.
 
@@ -71,7 +71,7 @@ Cool, desaturated neutrals carrying a single deep petrol accent and a four-part 
 
 ## Typography
 
-**Font:** Geist (via `next/font`, `--font-geist-sans`), fallback ui-sans-serif/system-ui. **Mono:** Geist Mono for file names, e-mail addresses and IDs (11–11.5px, ink-faint).
+**Font:** Geist (via `next/font`, `--font-geist-sans`), fallback ui-sans-serif/system-ui. **Mono:** Geist Mono for file names, e-mail addresses and IDs (12px, ink-faint).
 
 **Character:** neutral, technical grotesk; hierarchy comes from weight 600 and size, never from a second family.
 
@@ -80,7 +80,7 @@ Cool, desaturated neutrals carrying a single deep petrol accent and a four-part 
 - **Headline** (600, 1.25rem / `text-xl`, tight tracking): page h1 in the app and auth card, section h2 on public pages.
 - **Title** (600, 13–14px): card and feature headings.
 - **Body** (400, 13px, relaxed 1.625): standard running text; 15px for the hero intro, max-w-xl.
-- **Meta** (400, 11–12px, ink-faint): timestamps, footers, counts.
+- **Meta** (400, 12px min, ink-faint): timestamps, footers, counts.
 - **Label** (600, 12px, +0.04em, uppercase, ink-soft): `.label` above form fields; table headers `.th` at 11px, 700, +0.06em.
 
 **The Tabular Rule.** Tables and numeric stats use `tabular-nums`; ratings render with de-CH decimals ("7,5 /10 · 3").

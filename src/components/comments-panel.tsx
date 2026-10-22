@@ -76,7 +76,7 @@ export function CommentsPanel({
           placeholder="Beobachtung, Rückfrage oder Hinweis zum Gespräch …"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="text-[11px] text-ink-faint">{text.length}/4000 Zeichen</span>
+          <span className="text-[12px] text-ink-faint">{text.length}/4000 Zeichen</span>
           <button
             type="button"
             className="btn btn-primary"
@@ -153,11 +153,11 @@ function CommentItem({ comment, own }: { comment: Comment; own: boolean }) {
       <header className="flex flex-wrap items-baseline gap-2">
         <span className="text-[13px] font-semibold text-ink">{comment.authorName}</span>
         {own && <span className="badge bg-petrol-soft text-petrol">Sie</span>}
-        <span className="text-[11px] text-ink-faint">
+        <span className="text-[12px] text-ink-faint">
           {formatDateTimeWithSeconds(comment.createdAt)}
         </span>
         {comment.editedAt && (
-          <span className="text-[11px] italic text-ink-faint">
+          <span className="text-[12px] italic text-ink-faint">
             bearbeitet am {formatDateTimeWithSeconds(comment.editedAt)}
           </span>
         )}
@@ -180,7 +180,7 @@ function CommentItem({ comment, own }: { comment: Comment; own: boolean }) {
             onChange={(event) => setDraft(event.target.value)}
           />
           <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-[11px] text-ink-faint">{draft.length}/4000 Zeichen</span>
+            <span className="text-[12px] text-ink-faint">{draft.length}/4000 Zeichen</span>
             <span className="flex gap-2">
               <button type="button" className="btn btn-ghost" disabled={pending} onClick={cancel}>
                 Abbrechen

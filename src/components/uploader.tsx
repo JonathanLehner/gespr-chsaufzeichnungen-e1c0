@@ -338,7 +338,7 @@ export function Uploader({ template }: { template: string }) {
                     <tr key={item.key}>
                       <td className="td">
                         <span className="block font-mono text-[12px] text-ink">{item.file.name}</span>
-                        <span className="text-[11px] text-ink-faint">
+                        <span className="text-[12px] text-ink-faint">
                           {formatBytes(item.file.size)}
                           {item.durationMs ? ` · ${Math.round(item.durationMs / 1000)} s` : ""}
                         </span>
@@ -427,7 +427,7 @@ function ItemStatusCell({ item }: { item: Item }) {
     return (
       <div>
         <span className="badge bg-ok-soft text-ok">Hochgeladen</span>
-        <span className="mt-1 block text-[11px] text-ink-faint">{item.message}</span>
+        <span className="mt-1 block text-[12px] text-ink-faint">{item.message}</span>
       </div>
     );
   }
@@ -435,7 +435,7 @@ function ItemStatusCell({ item }: { item: Item }) {
     return (
       <div>
         <span className="badge bg-warn-soft text-warn">Bereits vorhanden</span>
-        <span className="mt-1 block text-[11px] text-ink-faint">{item.message}</span>
+        <span className="mt-1 block text-[12px] text-ink-faint">{item.message}</span>
       </div>
     );
   }
@@ -456,7 +456,7 @@ function ItemStatusCell({ item }: { item: Item }) {
         <span className="mt-1 block text-[11px] font-semibold text-bad">
           Kann nicht hochgeladen werden
         </span>
-        <span className="mt-0.5 block text-[11px] text-ink-faint">{item.problem}</span>
+        <span className="mt-0.5 block text-[12px] text-ink-faint">{item.problem}</span>
       </div>
     );
   }
@@ -474,7 +474,7 @@ function ItemStatusCell({ item }: { item: Item }) {
     <div>
       <span className="badge bg-petrol-soft text-petrol">Bereit</span>
       {item.source === "manuell" && (
-        <span className="mt-1 block text-[11px] text-ink-faint">Metadaten manuell erfasst</span>
+        <span className="mt-1 block text-[12px] text-ink-faint">Metadaten manuell erfasst</span>
       )}
     </div>
   );

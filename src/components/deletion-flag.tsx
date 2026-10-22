@@ -130,10 +130,10 @@ export function DeletionFlagBadge({
     <>
       <DeletionBadge flagged={current} />
       {current && flagged && flaggedBy && !state?.saving && (
-        <span className="mt-0.5 block text-[11px] text-ink-faint">{flaggedBy}</span>
+        <span className="mt-0.5 block text-[12px] text-ink-faint">{flaggedBy}</span>
       )}
       {state?.saving && (
-        <span className="mt-0.5 block text-[11px] text-ink-faint">Wird gespeichert …</span>
+        <span className="mt-0.5 block text-[12px] text-ink-faint">Wird gespeichert …</span>
       )}
     </>
   );

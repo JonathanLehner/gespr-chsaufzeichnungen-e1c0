@@ -33,7 +33,7 @@ export function RetryButton({ recordingId }: { recordingId: string }) {
       >
         {pending ? "Wird gestartet …" : "Erneut starten"}
       </button>
-      {message && <p className="mt-1 text-[11px] text-ink-faint">{message}</p>}
+      {message && <p className="mt-1 text-[12px] text-ink-faint">{message}</p>}
     </div>
   );
 }
@@ -166,7 +166,7 @@ export function CommentDeleteButton({
     });
   }
 
-  if (message && !confirming) return <p className="text-[11.5px] text-ink-faint">{message}</p>;
+  if (message && !confirming) return <p className="text-[12px] text-ink-faint">{message}</p>;
 
   if (!confirming) {
     return (
@@ -234,7 +234,7 @@ export function HardDeleteButton({
       <button type="button" className="btn btn-danger" disabled={pending} onClick={() => setOpen(true)}>
         Endgültig löschen
       </button>
-      {message && <p className="mt-1 text-[11px] text-ink-faint">{message}</p>}
+      {message && <p className="mt-1 text-[12px] text-ink-faint">{message}</p>}
 
       {open && (
         <div

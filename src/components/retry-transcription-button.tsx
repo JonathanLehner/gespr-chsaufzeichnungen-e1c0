@@ -70,7 +70,7 @@ export function RetryTranscriptionButton({
       </button>
       {message && (
         <p
-          className={`mt-1 text-[11px] leading-snug ${phase === "fehler" ? "text-bad" : "text-ink-faint"}`}
+          className={`mt-1 text-[12px] leading-snug ${phase === "fehler" ? "text-bad" : "text-ink-faint"}`}
           role="status"
         >
           {message}

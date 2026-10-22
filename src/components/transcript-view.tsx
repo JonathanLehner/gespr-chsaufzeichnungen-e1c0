@@ -166,7 +166,7 @@ const SentenceRow = memo(function SentenceRow({
       }`}
     >
       <span
-        className={`mt-0.5 shrink-0 font-mono text-[11px] tabular-nums group-hover:text-petrol ${
+        className={`mt-0.5 shrink-0 font-mono text-[12px] tabular-nums group-hover:text-petrol ${
           active ? "font-semibold text-petrol" : "text-ink-faint"
         }`}
         title="An diese Stelle springen"

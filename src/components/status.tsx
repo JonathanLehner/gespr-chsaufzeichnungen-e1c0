@@ -39,7 +39,7 @@ export function RatingValue({ average, count }: { average: number | null; count:
       <span className={`text-[14px] font-semibold ${tone}`}>
         {average.toLocaleString("de-CH", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
       </span>
-      <span className="text-[11px] text-ink-faint"> /10 · {count}</span>
+      <span className="text-[12px] text-ink-faint"> /10 · {count}</span>
     </span>
   );
 }

@@ -7,7 +7,7 @@ export function AppShell({ user, children }: { user: SessionUser; children: Reac
       <AppHeader user={user} />
       <main className="mx-auto w-full max-w-[1500px] flex-1 px-5 py-6">{children}</main>
       <footer className="border-t border-line bg-surface">
-        <div className="mx-auto max-w-[1500px] px-5 py-4 text-[11px] text-ink-faint">
+        <div className="mx-auto max-w-[1500px] px-5 py-4 text-[12px] text-ink-faint">
           Immotrust AG · Alle Aufnahmen sind für sämtliche angemeldeten Mitarbeitenden sichtbar.
         </div>
       </footer>

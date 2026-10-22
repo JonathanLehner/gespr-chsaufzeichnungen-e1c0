@@ -31,7 +31,7 @@ export function Wordmark({ compact = false }: { compact?: boolean }) {
         <span className="block text-[13px] font-semibold tracking-tight text-ink">Immotrust AG</span>
         {!compact && (
           // Auf schmalen Viewports würde die Unterzeile gegen die Kopfzeilen-Schaltflächen laufen.
-          <span className="hidden text-[11px] text-ink-faint sm:block">Gesprächsaufzeichnungen</span>
+          <span className="hidden text-[12px] text-ink-faint sm:block">Gesprächsaufzeichnungen</span>
         )}
       </span>
     </span>

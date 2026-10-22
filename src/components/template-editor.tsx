@@ -129,7 +129,7 @@ export function TemplateEditor({
             </button>
           ))}
         </div>
-        <p className="mt-2 text-[11.5px] text-ink-faint">
+        <p className="mt-2 text-[12px] text-ink-faint">
           Für abweichende Zeitformate kann {"{DatumZeit:yyyy-MM-dd_HH-mm-ss}"} verwendet werden.
           Zulässige Bausteine: yyyy, MM, dd, HH, mm, ss. Die Uhrzeit wird als CET interpretiert.
         </p>
@@ -185,7 +185,7 @@ export function TemplateEditor({
               ["Zeitpunkt (CET)", formatDateTimeWithSeconds(preview.parsed.callAtUtc)],
             ].map(([term, value]) => (
               <div key={term} className="rounded-[4px] border border-line bg-surface p-2">
-                <dt className="text-[11px] uppercase tracking-wide text-ink-faint">{term}</dt>
+                <dt className="text-[12px] uppercase tracking-wide text-ink-faint">{term}</dt>
                 <dd className="mt-0.5 text-[13px] font-medium text-ink">{value}</dd>
               </div>
             ))}

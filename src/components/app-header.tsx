@@ -89,7 +89,7 @@ function AccountDetails({ user, align }: { user: SessionUser; align: "left" | "r
   return (
     <div className={`min-w-0 leading-tight ${align === "right" ? "text-right" : "text-left"}`}>
       <p className="text-[12px] font-semibold text-ink">{user.name}</p>
-      <p className="text-[11px] break-words text-ink-faint">
+      <p className="text-[12px] break-words text-ink-faint">
         {user.email}
         {user.isAdmin && (
           <span className="ml-1.5 rounded-sm bg-petrol-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-petrol">

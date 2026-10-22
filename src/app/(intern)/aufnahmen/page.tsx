@@ -165,7 +165,7 @@ export default async function AufnahmenPage({
                       <Link href={`/aufnahmen/${row._id}`} className="text-petrol hover:underline">
                         {formatDateTime(row.callAtUtc)}
                       </Link>
-                      <span className="mt-0.5 block break-all font-mono text-[11px] text-ink-faint">
+                      <span className="mt-0.5 block break-all font-mono text-[12px] text-ink-faint">
                         {row.originalFilename}
                       </span>
                     </td>
@@ -211,12 +211,12 @@ export default async function AufnahmenPage({
                       <span className="block">
                         <StatusBadge status={row.transcriptionStatus} />
                         {row.transcriptionStatus === "fehlgeschlagen" && (
-                          <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
+                          <span className="mt-0.5 block text-[12px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
                             {describeTranscriptionError(row.transcriptionError).message}
                           </span>
                         )}
                         {row.transcriptionStatus === "ohne_sprache" && (
-                          <span className="mt-0.5 block text-[11px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
+                          <span className="mt-0.5 block text-[12px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
                             Ausgewertet, aber nichts Gesprochenes zu hören.
                           </span>
                         )}
@@ -324,7 +324,7 @@ export default async function AufnahmenPage({
         </nav>
       )}
 
-      <p className="text-[11px] text-ink-faint">
+      <p className="text-[12px] text-ink-faint">
         Angemeldet als {user.email}. Alle nicht endgültig gelöschten Aufnahmen sind für sämtliche
         Mitarbeitenden sichtbar.
       </p>
