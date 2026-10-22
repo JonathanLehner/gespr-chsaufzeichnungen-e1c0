@@ -51,7 +51,7 @@ export default function Home() {
               <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-ink">
                 Jedes Verkaufsgespräch auffindbar, nachhörbar und bewertet.
               </h1>
-              <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-ink-soft">
+              <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-pretty text-ink-soft">
                 Die Gesprächsaufzeichnungen der Immotrust AG liegen an einem Ort: automatisch
                 transkribiert, durchsuchbar bis auf den einzelnen Satz und für das gesamte
                 Verkaufsteam gemeinsam nutzbar.
@@ -101,7 +101,7 @@ export default function Home() {
             {features.map((feature) => (
               <article key={feature.title} className="bg-surface p-5">
                 <h3 className="text-[14px] font-semibold text-ink">{feature.title}</h3>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-soft">{feature.text}</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-pretty text-ink-soft">{feature.text}</p>
               </article>
             ))}
           </div>
@@ -126,7 +126,7 @@ export default function Home() {
             </div>
             <div>
               <h2 className="text-xl font-semibold tracking-tight text-ink">Zugang und Rollen</h2>
-              <ul className="mt-5 space-y-4 text-[13px] leading-relaxed text-ink-soft">
+              <ul className="mt-5 space-y-4 text-[13px] leading-relaxed text-pretty text-ink-soft">
                 <li>
                   <strong className="font-semibold text-ink">Mitarbeitende</strong> registrieren sich
                   mit ihrer Geschäftsadresse, bestätigen die E-Mail-Adresse und sehen danach

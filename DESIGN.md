@@ -79,7 +79,7 @@ Cool, desaturated neutrals carrying a single deep petrol accent and a four-part 
 - **Display** (600, 2.25rem / `text-4xl`, 1.1, tight tracking): landing hero h1 only.
 - **Headline** (600, 1.25rem / `text-xl`, tight tracking): page h1 in the app and auth card, section h2 on public pages.
 - **Title** (600, 13–14px): card and feature headings.
-- **Body** (400, 13px, relaxed 1.625): standard running text; 15px for the hero intro, max-w-xl.
+- **Body** (400, 13px, relaxed 1.625): standard running text; 15px for the hero intro, max-w-xl. Body paragraphs on public and auth pages use `text-pretty` so no line ends with a single word.
 - **Meta** (400, 12px min, ink-faint): timestamps, footers, counts.
 - **Label** (600, 12px, +0.04em, uppercase, ink-soft): `.label` above form fields; table headers `.th` at 11px, 700, +0.06em.
 
@@ -143,5 +143,5 @@ Small, firm corners: 4px for controls (buttons, fields, notices, nav links), 6px
 ### Don't:
 - **Don't** add shadows, gradients or a second accent to resting surfaces.
 - **Don't** use status colours for decoration or emphasis.
-- **Don't** add uppercase tracked kickers above headings; the existing ones on the landing and 404 pages are not part of the system.
+- **Don't** add uppercase tracked kickers above headings; the existing one on the 404 page is not part of the system.
 - **Don't** load more than one image eagerly per page.

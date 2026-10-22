@@ -31,16 +31,16 @@ export function AuthShell({
             {tone === "error" ? (
               <div className="border-l border-bad pl-4" role="alert">
                 <h1 className="text-xl font-semibold tracking-tight text-balance text-bad">{title}</h1>
-                <div className="mt-2 space-y-2 text-[13px] leading-relaxed text-ink">{intro}</div>
+                <div className="mt-2 space-y-2 text-[13px] leading-relaxed text-pretty text-ink">{intro}</div>
               </div>
             ) : (
               <>
                 <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-soft">{intro}</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-pretty text-ink-soft">{intro}</p>
               </>
             )}
             <div className={tone === "error" ? "mt-5" : "mt-6"}>{children}</div>
-            {footer && <div className="mt-6 border-t border-line pt-4 text-[13px]">{footer}</div>}
+            {footer && <div className="mt-6 border-t border-line pt-4 text-[13px] text-pretty">{footer}</div>}
           </section>
           <aside className="hidden overflow-hidden rounded-md border border-line bg-canvas lg:block">
             {/* Nur ab lg sichtbar: die Quelle gilt erst dort, darunter lädt das Bild nichts. */}
@@ -61,7 +61,7 @@ export function AuthShell({
               <Logo size={28} className="mt-0.5 shrink-0" />
               <div>
                 <h2 className="text-[13px] font-semibold text-ink">Gesprächsaufzeichnungen</h2>
-                <p className="mt-2 text-[12px] leading-relaxed text-ink-soft">
+                <p className="mt-2 text-[12px] leading-relaxed text-pretty text-ink-soft">
                   Aufnahmen der Verkaufsgespräche zentral ablegen, automatisch transkribieren,
                   durchsuchen, anhören und bewerten – für das gesamte Verkaufsteam.
                 </p>

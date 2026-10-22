@@ -35,7 +35,7 @@ function StateNotice({ state }: { state: AuthState }) {
   if (state.status === "leer" || !state.message) return null;
   const isError = state.status === "fehler";
   return (
-    <div id={NOTICE_ID} className={`notice ${isError ? "notice-error" : "notice-ok"} mb-4`} role="alert">
+    <div id={NOTICE_ID} className={`notice ${isError ? "notice-error" : "notice-ok"} mb-4 text-pretty`} role="alert">
       <p>{state.message}</p>
       {state.verifyLink && (
         <p className="mt-2 border-t border-current/20 pt-2 text-[12px]">
@@ -152,7 +152,7 @@ export function RegisterForm() {
           />
         </div>
       </div>
-      <p className="text-[12px] text-ink-faint">
+      <p className="text-[12px] text-pretty text-ink-faint">
         Mindestens 10 Zeichen, davon mindestens ein Buchstabe und eine Ziffer.
       </p>
       <SubmitButton label="Konto erstellen" pendingLabel="Konto wird erstellt …" />

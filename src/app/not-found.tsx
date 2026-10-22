@@ -17,7 +17,7 @@ export default function NotFound() {
             Fehler 404
           </p>
           <h1 className="mt-2 text-xl font-semibold text-ink">Seite nicht gefunden</h1>
-          <p className="mt-2 text-[13px] leading-relaxed text-ink-soft">
+          <p className="mt-2 text-[13px] leading-relaxed text-pretty text-ink-soft">
             Die angeforderte Seite existiert nicht oder die Aufnahme wurde endgültig gelöscht.
           </p>
           <div className="mt-6 flex gap-2">
