@@ -44,10 +44,10 @@ async function sendVerifyLink(email: string): Promise<{ verifyLink?: string }> {
   return issued.delivery.status === "gesendet" ? {} : { verifyLink: issued.path };
 }
 
-async function consumeToken(
-  token: string,
-  kind: TokenDoc["kind"],
-): Promise<{ ok: true; email: string } | { ok: false; message: string }> {
+type TokenCheck = { ok: true; doc: TokenDoc } | { ok: false; message: string };
+
+/** Prüft einen Link, ohne ihn zu verbrauchen. */
+async function checkToken(token: string, kind: TokenDoc["kind"]): Promise<TokenCheck> {
   if (!token) {
     return { ok: false, message: "Der Link ist unvollständig. Bitte fordern Sie einen neuen an." };
   }
@@ -70,6 +70,16 @@ async function consumeToken(
           : "Dieser Reset-Link ist abgelaufen. Bitte fordern Sie einen neuen an.",
     };
   }
+  return { ok: true, doc };
+}
+
+async function consumeToken(
+  token: string,
+  kind: TokenDoc["kind"],
+): Promise<{ ok: true; email: string } | { ok: false; message: string }> {
+  const check = await checkToken(token, kind);
+  if (!check.ok) return check;
+  const { doc } = check;
   const claimed = await updateOne(
     Collections.tokens,
     { _id: doc._id, usedAt: null },
@@ -218,6 +228,14 @@ export async function requestResetAction(_prev: AuthState, formData: FormData): 
     message:
       "Falls ein Konto zu dieser Adresse besteht, haben wir einen Link zum Zurücksetzen an diese E-Mail-Adresse geschickt. Er ist 60 Minuten gültig. Aus Sicherheitsgründen wird der Link nie hier angezeigt. Kommt keine E-Mail an, prüfen Sie bitte den Spam-Ordner oder wenden Sie sich an die Administration.",
   };
+}
+
+/** Für /passwort-neu: zeigt ungültige Links an, bevor jemand ein Passwort eintippt. */
+export async function checkResetTokenAction(
+  token: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const check = await checkToken(token, "passwort_reset");
+  return check.ok ? { ok: true } : check;
 }
 
 export async function resetPasswordAction(_prev: AuthState, formData: FormData): Promise<AuthState> {

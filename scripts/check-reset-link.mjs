@@ -6,6 +6,8 @@
  *  2. Der Postausgang im Admin-Dashboard zeigt ebenfalls keinen Reset-Link.
  *  3. „Reset-Link erzeugen“ in der Kontenliste zeigt dem Superuser einen Link,
  *     mit dem sich das Passwort tatsächlich neu setzen lässt.
+ *  4. Ein ausgedachter oder bereits verwendeter Link zeigt sofort die
+ *     Fehlermeldung statt des Formulars.
  *
  * Voraussetzung: `npm run build` und `npm run start -- -p 3123` laufen.
  *
@@ -84,6 +86,20 @@ record(
   notices[1]?.slice(0, 80),
 );
 
+/* 1b – Ein ausgedachter Link zeigt kein Formular. */
+
+async function expectInvalidLink(target, label, p = page) {
+  await p.goto(target.startsWith("http") ? target : `${BASE}${target}`, { waitUntil: "load" });
+  await p.waitForSelector(".notice[role=alert]", { timeout: 30000 });
+  const text = (await p.textContent(".notice[role=alert]"))?.replace(/\s+/g, " ").trim() ?? "";
+  const formFields = await p.locator("#password").count();
+  const requestLink = await p.getByRole("link", { name: "Neuen Link anfordern" }).count();
+  record(label, formFields === 0 && requestLink === 1, text.slice(0, 80));
+}
+
+await expectInvalidLink("/passwort-neu?token=abc", "ausgedachter Link: Meldung statt Formular");
+await expectInvalidLink("/passwort-neu", "Link ohne Token: Meldung statt Formular");
+
 /* 2 – Ein frisches Konto, damit der Reset niemandem das Passwort verstellt. */
 
 await visit("/registrieren");
@@ -143,6 +159,8 @@ if (!ADMIN_PASSWORD) {
   await freshPage.waitForSelector(".notice[role=alert]", { timeout: 30000 });
   const resetNotice = (await freshPage.textContent(".notice[role=alert]"))?.trim() ?? "";
   record("Passwort über den Link gesetzt", resetNotice.includes("Passwort geändert"), resetNotice.slice(0, 80));
+
+  await expectInvalidLink(link, "verwendeter Link: Meldung statt Formular", freshPage);
 
   await fresh.close();
   await logout();
