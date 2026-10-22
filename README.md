@@ -169,6 +169,11 @@ einer langen Aufnahme lückenlos aneinander anschliessen und zusammen wieder das
 Beide räumen ihre Daten selbst wieder ab. Die `.mts`-Skripte lesen `MONGODB_URI` direkt; Audiodateien
 holen sie über ihre Adresse `/api/dateien/…` von der laufenden Anwendung.
 
+`check-anmelden-bild.mjs` lädt `/anmelden` und `/registrieren` bei 1440px unter Fast 3G ohne Cache
+und prüft, dass das Bildfeld erst die unscharfe Vorschau und dann das scharfe Bild zeigt, nie ein
+leeres Feld, auch nach einer Anmeldung mit falschem Passwort (mit und ohne geladenes JavaScript).
+Dazu: Kopf- und Fusslogo beginnen auf derselben x-Position, bei 390px keine Anfrage an `/bilder/portal`.
+
 Mit `BASE=https://…` laufen dieselben Skripte gegen die ausgelieferte Anwendung.
 
 ## Auslieferung
