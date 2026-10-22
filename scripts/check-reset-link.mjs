@@ -90,8 +90,8 @@ record(
 
 async function expectInvalidLink(target, label, p = page) {
   await p.goto(target.startsWith("http") ? target : `${BASE}${target}`, { waitUntil: "load" });
-  await p.waitForSelector(".notice[role=alert]", { timeout: 30000 });
-  const text = (await p.textContent(".notice[role=alert]"))?.replace(/\s+/g, " ").trim() ?? "";
+  await p.waitForSelector("[role=alert]", { timeout: 30000 });
+  const text = (await p.textContent("[role=alert]"))?.replace(/\s+/g, " ").trim() ?? "";
   const formFields = await p.locator("#password").count();
   const requestLink = await p.getByRole("link", { name: "Neuen Link anfordern" }).count();
   record(label, formFields === 0 && requestLink === 1, text.slice(0, 80));

@@ -7,11 +7,13 @@ export function AuthShell({
   intro,
   children,
   footer,
+  tone,
 }: {
   title: string;
-  intro: string;
+  intro: React.ReactNode;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  tone?: "error";
 }) {
   const image = IMAGES.portal;
   return (
@@ -26,9 +28,18 @@ export function AuthShell({
       <main className="flex-1">
         <div className="mx-auto grid max-w-5xl gap-10 px-5 py-12 lg:grid-cols-[minmax(0,1fr)_460px] lg:items-start">
           <section className="card p-7">
-            <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
-            <p className="mt-2 text-[13px] leading-relaxed text-ink-soft">{intro}</p>
-            <div className="mt-6">{children}</div>
+            {tone === "error" ? (
+              <div className="border-l border-bad pl-4" role="alert">
+                <h1 className="text-xl font-semibold tracking-tight text-balance text-bad">{title}</h1>
+                <div className="mt-2 space-y-2 text-[13px] leading-relaxed text-ink">{intro}</div>
+              </div>
+            ) : (
+              <>
+                <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-soft">{intro}</p>
+              </>
+            )}
+            <div className={tone === "error" ? "mt-5" : "mt-6"}>{children}</div>
             {footer && <div className="mt-6 border-t border-line pt-4 text-[13px]">{footer}</div>}
           </section>
           <aside className="hidden overflow-hidden rounded-md border border-line bg-canvas lg:block">

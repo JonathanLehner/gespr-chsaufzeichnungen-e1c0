@@ -122,6 +122,7 @@ Small, firm corners: 4px for controls (buttons, fields, notices, nav links), 6px
 
 ### Notices and Badges
 - `.notice` (`-error`, `-ok`, `-info`, `-warn`): 4px radius, 1px tinted border, 13px/1.45; form results use `role="alert"`.
+- Auth pages whose link failed (`AuthShell tone="error"`): no notice box. The card heading turns bad red, the explanation stays ink body text, a 1px bad rule runs on the left, and the actions sit right below with the recovery as `btn-primary` first.
 - `.badge`: pill, 11px/600; status badges lead with a 6px `bg-current` dot.
 
 ### Navigation

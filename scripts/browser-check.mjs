@@ -194,7 +194,7 @@ record("E-Mail-Bestätigung erfolgreich", confirmed.includes("bestätigt"), conf
 await shot("04-bestaetigt");
 
 await visit(`/bestaetigen?token=abgelaufen123`);
-const invalidToken = await page.locator('.notice[role="alert"]').innerText();
+const invalidToken = await page.locator('[role="alert"]').innerText();
 record("Ungültiger Bestätigungslink erklärt", invalidToken.includes("ungültig"), invalidToken.slice(0, 80));
 
 await visit(`/anmelden`);
@@ -243,11 +243,7 @@ record(
 );
 
 await visit(`/passwort-neu?token=abgelaufen`);
-await page.fill("#password", "NeuesPasswort2026");
-await page.fill("#passwordRepeat", "NeuesPasswort2026");
-await page.click('button[type="submit"]');
-await page.waitForSelector('.notice[role="alert"]');
-const badReset = await page.locator('.notice[role="alert"]').innerText();
+const badReset = await page.locator('[role="alert"]').innerText();
 record("Abgelaufener Reset-Link erklärt", badReset.includes("ungültig") || badReset.includes("abgelaufen"), badReset.slice(0, 80));
 
 /* 5 – Anmeldung als Mitarbeitende */

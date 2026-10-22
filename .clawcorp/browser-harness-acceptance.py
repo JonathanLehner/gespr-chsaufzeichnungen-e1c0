@@ -374,7 +374,7 @@ try:
     findings.append("Passwort-vergessen-Formular=%s" % forgot_ok)
 
     go("/passwort-neu")
-    newpw_ok = has_text("Neues Passwort setzen")
+    newpw_ok = has_text("Dieser Link kann nicht verwendet werden") and has_text("Neuen Link anfordern")
     findings.append("Neues-Passwort-Formular=%s" % newpw_ok)
 
     logged_in = login(USER_EMAIL, USER_PW)

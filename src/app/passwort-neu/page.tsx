@@ -22,23 +22,23 @@ export default async function PasswortNeuPage({
   if (!token || problem) {
     return (
       <AuthShell
-        title="Neues Passwort setzen"
-        intro="Dieser Link kann nicht verwendet werden."
-        footer={
-          <Link href="/anmelden" className="font-semibold text-petrol underline underline-offset-2">
-            Zurück zur Anmeldung
-          </Link>
+        tone="error"
+        title="Dieser Link kann nicht verwendet werden"
+        intro={
+          <>
+            <p>{problem}</p>
+            <p>Links zum Zurücksetzen sind 60 Minuten gültig und lassen sich nur einmal verwenden.</p>
+          </>
         }
       >
-        <div className="notice notice-error" role="alert">
-          {problem}
+        <div className="flex flex-wrap gap-3">
+          <Link href="/passwort-vergessen" className="btn btn-primary min-h-11">
+            Neuen Link anfordern
+          </Link>
+          <Link href="/anmelden" className="btn btn-secondary min-h-11">
+            Zurück zur Anmeldung
+          </Link>
         </div>
-        <p className="mt-4 text-[13px] leading-relaxed text-ink-soft">
-          Links zum Zurücksetzen sind 60 Minuten gültig und lassen sich nur einmal verwenden.
-        </p>
-        <Link href="/passwort-vergessen" className="btn btn-primary mt-5">
-          Neuen Link anfordern
-        </Link>
       </AuthShell>
     );
   }
