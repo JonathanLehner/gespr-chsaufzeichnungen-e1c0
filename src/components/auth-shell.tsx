@@ -17,7 +17,7 @@ export function AuthShell({
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex h-14 max-w-5xl items-center px-5">
+        <div className="mx-auto flex h-14 max-w-6xl items-center px-5">
           <Link prefetch={false} href="/" className="rounded-sm">
             <Wordmark />
           </Link>
@@ -31,20 +31,21 @@ export function AuthShell({
             <div className="mt-6">{children}</div>
             {footer && <div className="mt-6 border-t border-line pt-4 text-[13px]">{footer}</div>}
           </section>
-          <aside className="hidden overflow-hidden rounded-md border border-line lg:block">
-            {/* eslint-disable-next-line @next/next/no-img-element -- Die WebP-Varianten werden zur Bauzeit erzeugt, eine Optimierung zur Laufzeit ist nicht erwünscht. */}
-            <img
-              src={image.src}
-              srcSet={image.srcSet}
-              sizes={image.sizes}
-              width={image.width}
-              height={image.height}
-              alt={image.alt}
-              loading="lazy"
-              decoding="async"
-              className="h-auto w-full"
-              style={{ aspectRatio: `${image.width} / ${image.height}` }}
-            />
+          <aside className="hidden overflow-hidden rounded-md border border-line bg-canvas lg:block">
+            {/* Nur ab lg sichtbar: die Quelle gilt erst dort, darunter lädt das Bild nichts. */}
+            <picture>
+              <source media="(min-width: 1024px)" srcSet={image.srcSet} sizes="460px" />
+              <img
+                src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+                width={image.width}
+                height={image.height}
+                alt={image.alt}
+                loading="eager"
+                fetchPriority="high"
+                className="block h-auto w-full"
+                style={{ aspectRatio: `${image.width} / ${image.height}` }}
+              />
+            </picture>
             <div className="flex items-start gap-3 border-t border-line bg-surface p-5">
               <Logo size={28} className="mt-0.5 shrink-0" />
               <div>
