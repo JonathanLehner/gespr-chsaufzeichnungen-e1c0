@@ -54,7 +54,11 @@ export function AuthShell({
                 loading="eager"
                 fetchPriority="high"
                 className="block h-auto w-full"
-                style={{ aspectRatio: `${image.width} / ${image.height}` }}
+                style={{
+                  aspectRatio: `${image.width} / ${image.height}`,
+                  backgroundImage: `url(${image.placeholder})`,
+                  backgroundSize: "cover",
+                }}
               />
             </picture>
             <div className="flex items-start gap-3 border-t border-line bg-surface p-5">

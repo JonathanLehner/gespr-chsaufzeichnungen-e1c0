@@ -11,6 +11,8 @@ export type StaticImage = {
   width: number;
   height: number;
   alt: string;
+  /** Winzige, unscharfe Vorschau als data-URI, sichtbar bis das eigentliche Bild geladen ist. */
+  placeholder?: string;
 };
 
 export const IMAGES: Record<"hero" | "portal", StaticImage> = {
@@ -29,5 +31,7 @@ export const IMAGES: Record<"hero" | "portal", StaticImage> = {
     width: 1200,
     height: 896,
     alt: "Besprechungsraum der Immotrust AG mit Blick über die Dächer der Stadt",
+    placeholder:
+      "data:image/webp;base64,UklGRqQAAABXRUJQVlA4IJgAAAAwBQCdASoYABIAPtFcpE6oJSMiKAqpABoJQBh1ggqaZNARuZ/ymxJrUtaUDfaltQrfAAD+43GuJtPZf4fQvFBYBRihC3pXTdKZszzW+jZde1S4mlvqeGfRWUoA/hZi4SYjGI0wgrrw2f/vc/fZSuGpwKpRL7H596+ZdOk+lMBu+Y7wOTLhxZK6VXG2EXGyoAw3bN6STMAAAA==",
   },
 };
