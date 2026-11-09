@@ -133,7 +133,13 @@ export function MailSettingsEditor({
             value={apiKey}
             disabled={clearKey}
             onChange={(event) => setApiKey(event.target.value)}
-            placeholder={settings.apiKeyStored ? "hinterlegt – leer lassen behält ihn" : "z. B. re_…"}
+            placeholder={
+              settings.apiKeyStored
+                ? "hinterlegt – leer lassen behält ihn"
+                : provider === "clawcorp"
+                  ? "z. B. ccm_…"
+                  : "z. B. re_…"
+            }
           />
           {settings.apiKeyStored && (
             <label className="mt-1.5 flex items-center gap-2 text-[12px] text-ink-soft">

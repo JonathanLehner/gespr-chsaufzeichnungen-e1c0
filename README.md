@@ -75,10 +75,11 @@ Optional für den E-Mail-Versand. Dieselben Werte lassen sich im Admin-Dashboard
 eingetragen ist, hat Vorrang. Ist beides leer, werden E-Mails nur protokolliert:
 
 ```
-MAIL_PROVIDER=resend            # resend | postmark | sendgrid | mailgun | protokoll
-MAIL_API_KEY=...                # Schlüssel des Dienstes
-MAIL_FROM_ADDRESS=noreply@immotrustag.ch
-MAIL_FROM_NAME=Gesprächsaufzeichnungen Immotrust AG
+MAIL_PROVIDER=clawcorp          # resend | postmark | sendgrid | mailgun | clawcorp | protokoll
+MAIL_API_KEY=...                # Schlüssel des Dienstes (ClawCorp Mail: ccm_…)
+MAIL_API_URL=https://mailbox-for-startups-6e48.clawcorp.ai   # nur für ClawCorp Mail, dies ist die Vorgabe
+MAIL_FROM_ADDRESS=noreply@immotrustag.ch   # ClawCorp Mail: eine Absenderadresse des Schlüssels
+MAIL_FROM_NAME=Gesprächsaufzeichnungen
 MAIL_REPLY_TO=...               # optional
 MAIL_MAILGUN_DOMAIN=...         # nur für Mailgun
 MAIL_MAILGUN_REGION=eu          # nur für Mailgun, eu oder us

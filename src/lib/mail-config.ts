@@ -12,6 +12,7 @@ export const MAIL_PROVIDERS: MailProvider[] = [
   "postmark",
   "sendgrid",
   "mailgun",
+  "clawcorp",
 ];
 
 export const PROVIDER_LABELS: Record<MailProvider, string> = {
@@ -20,6 +21,7 @@ export const PROVIDER_LABELS: Record<MailProvider, string> = {
   postmark: "Postmark",
   sendgrid: "SendGrid",
   mailgun: "Mailgun",
+  clawcorp: "ClawCorp Mail",
 };
 
 export const DELIVERY_LABELS: Record<MailDeliveryStatus, string> = {

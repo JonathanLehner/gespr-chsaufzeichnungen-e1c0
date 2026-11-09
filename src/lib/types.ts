@@ -181,7 +181,7 @@ export type FilenameTemplateSettings = {
 };
 
 /** Angebundene Versanddienste; `protokoll` stellt nichts zu, sondern schreibt nur ins Serverprotokoll. */
-export type MailProvider = "resend" | "postmark" | "sendgrid" | "mailgun" | "protokoll";
+export type MailProvider = "resend" | "postmark" | "sendgrid" | "mailgun" | "clawcorp" | "protokoll";
 
 export type MailDeliveryStatus = "gesendet" | "fehlgeschlagen" | "nicht_konfiguriert";
 

@@ -16,12 +16,13 @@ import type { MailDeliveryStatus, MailProvider, MailSettings } from "./types";
  * Versanddienst und Absenderadresse sind einstellbar, und zwar an zwei Stellen:
  *
  *  1. Umgebungsvariablen (im Worker als Secrets hinterlegt)
- *       MAIL_PROVIDER      resend | postmark | sendgrid | mailgun | protokoll
+ *       MAIL_PROVIDER      resend | postmark | sendgrid | mailgun | clawcorp | protokoll
  *       MAIL_API_KEY       Schlüssel des gewählten Dienstes
  *       MAIL_FROM_ADDRESS  Absenderadresse, z. B. noreply@immotrustag.ch
  *       MAIL_FROM_NAME     Anzeigename des Absenders
  *       MAIL_REPLY_TO      optionale Antwortadresse
  *       MAIL_MAILGUN_DOMAIN, MAIL_MAILGUN_REGION (eu|us) – nur für Mailgun
+ *       MAIL_API_URL       nur für ClawCorp Mail, Vorgabe CLAWCORP_MAIL_URL
  *       APP_BASE_URL       Basis der Links in den Mails
  *  2. Admin-Dashboard: dieselben Werte liegen im Einstellungsdokument
  *     `mail_settings` und haben Vorrang, sobald sie gesetzt sind. So lässt sich
@@ -46,6 +47,7 @@ const SETTINGS_ID = "mail_settings";
 const DEFAULT_FROM_ADDRESS = "noreply@immotrustag.ch";
 const DEFAULT_FROM_NAME = "Gesprächsaufzeichnungen Immotrust AG";
 const TIMEOUT_MS = 12_000;
+const CLAWCORP_MAIL_URL = "https://mailbox-for-startups-6e48.clawcorp.ai";
 
 function env(name: string): string {
   return (process.env[name] ?? "").trim();
@@ -325,6 +327,22 @@ async function deliver(config: MailConfig, key: string, message: MailMessage): P
           "content-type": "application/x-www-form-urlencoded",
         },
         body: form.toString(),
+      });
+    }
+
+    case "clawcorp": {
+      // `from` muss eine der Absenderadressen sein, für die der Schlüssel erstellt wurde.
+      const base = (env("MAIL_API_URL") || CLAWCORP_MAIL_URL).replace(/\/+$/, "");
+      return request(`${base}/api/v1/messages`, {
+        headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from: config.fromAddress,
+          to: [message.to],
+          subject: message.subject,
+          text: message.text,
+          html: message.html,
+          ...(config.replyTo ? { replyTo: config.replyTo } : {}),
+        }),
       });
     }
 
