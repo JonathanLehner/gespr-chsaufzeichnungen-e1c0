@@ -185,6 +185,18 @@ QA_USER_EMAIL=... QA_USER_PASSWORD=... \
   npx tsx --env-file=.env.local --conditions=react-server scripts/create-qa-user.mts
 ```
 
+`issue-reset-link.mts` erzeugt einen Reset-Link (60 Minuten gültig, einmal verwendbar) für ein
+bestehendes Konto, wenn kein Versanddienst eingerichtet ist und sich niemand mit Adminrechten
+anmelden kann. Es setzt kein Passwort:
+
+```bash
+RESET_EMAIL=... APP_BASE_URL=https://gespr-chsaufzeichnungen-e1c0.clawcorp.ai \
+  npx tsx --env-file=.env.local --conditions=react-server scripts/issue-reset-link.mts
+```
+
+Ohne `MAIL_PROVIDER` und `MAIL_API_KEY` (oder einen im Admin-Dashboard hinterlegten Dienst) werden
+Bestätigungs- und Reset-Mails nur protokolliert und nie zugestellt.
+
 ## Auslieferung
 
 Die Anwendung läuft als Cloudflare Worker (`@opennextjs/cloudflare`, Konfiguration in
