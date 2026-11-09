@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@breezystack/lamejs": "^1.2.7",
-    "@opennextjs/cloudflare": "^1.20.13",
+    "@opennextjs/cloudflare": "^1.20.16",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -34,6 +34,6 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5",
-    "wrangler": "^4.152.0"
+    "wrangler": "^4.158.0"
   }
 }
