@@ -22,9 +22,9 @@ transkribiert allein in einem Durchgang (kein Zwei-Pass, keine Kombination).
 - **gemini-3.5-transcribe**: nicht neu gestartet, sondern die Ergebnisse von Auftrag
   6af37fd2b70571a2e52d1579 (Varianten A–D) übernommen. Gezeigt wird die beste Variante (meiste
   behaltene Wörter ohne 9911). Der Lauf war nach 10 von 44 Anfragen stehen geblieben und wurde mit
-  seinem eigenen Skript fortgesetzt, das fertige Anfragen überspringt. Stand beim Schreiben: 36 von 44
-  Läufen fertig (Google lässt für dieses Modell 10 000 Eingabe-Tokens je Minute zu); die Spalte
-  wird erneuert, wenn der Lauf fertig ist.
+  seinem eigenen Skript fortgesetzt, das fertige Anfragen überspringt. Stand beim Schreiben: 37 von 44
+  Läufen fertig; 8334 B–D und 10980 A–D fehlen noch, weil das Tageskontingent für dieses Modell
+  (100 Anfragen je Tag) aufgebraucht ist. Die Spalte wird erneuert, wenn der Lauf fertig ist.
 - **Preise** (USD je 1 Mio. Tokens, Ausgabe inkl. Denken): flash-lite 0,30/2,50; argon und carbon
   2/10 bis 30.11.2026, **4/20 ab 1.12.2026**; 3.8-flash 0,75/3,75 bis 31.12.2026, 1,50/7,50 ab
   1.1.2027; 3.5-transcribe 2/12.
@@ -152,7 +152,7 @@ Erzeugt mit `node scripts/vergleich-modelle-bericht.mjs` aus den Rohdaten in
 | B Opus, de-DE | 8/10 (unvollständig) | 61 % | 71 % |
 | D Original, de-DE | 8/10 (unvollständig) | 56 % | 41 % |
 | C Original, ohne Sprache | 8/10 (unvollständig) | 56 % | 57 % |
-| A Opus, ohne Sprache | 8/10 (unvollständig) | 49 % | 52 % |
+| A Opus, ohne Sprache | 9/10 (unvollständig) | 51 % | 55 % |
 
 Beste Variante: **B (Opus, de-DE)**.
 
