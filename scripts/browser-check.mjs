@@ -962,6 +962,7 @@ record(
   await page.inputValue("#vorlage"),
 );
 
+await visit(`/admin/transkription`);
 const jobRows = await page.locator("table tbody tr").count();
 record("Auftragsübersicht gefüllt", jobRows > 0, `${jobRows} Zeilen`);
 const jobSections = (await page.locator("h3").allInnerTexts()).map((title) =>

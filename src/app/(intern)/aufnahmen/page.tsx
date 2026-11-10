@@ -3,14 +3,14 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { listRecordings } from "@/lib/recordings";
-import { jobProgress, type JobProgress } from "@/lib/transcription";
+import { jobProgress, queueHalt, type JobProgress } from "@/lib/transcription";
 import { DEFAULT_SORT, parseSort } from "@/lib/recording-sort";
 import { cetDayStartUtcIso, renderTimestamp } from "@/lib/time";
 import { RecordingsFilter, type FilterValues } from "@/components/recordings-filter";
 import { RecordingsTable, type TableRow } from "@/components/recordings-table";
 import { DEFAULT_TEMPLATE_EXAMPLE } from "@/lib/filename-template";
 import { TranscriptionWatcher, type WatchedRecording } from "@/components/transcription-watcher";
-import type { TranscriptionStatus } from "@/lib/types";
+import type { QueueHalt, TranscriptionStatus } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Aufnahmen" };
 
@@ -94,13 +94,18 @@ export default async function AufnahmenPage({
   ].filter(Boolean).length;
 
   const renderedAt = renderTimestamp();
-  const progress = await jobProgress(
-    result.rows.filter((row) => row.transcriptionStatus === "in_arbeit").map((row) => row._id),
-  );
+  const [progress, halt] = await Promise.all([
+    jobProgress(result.rows.filter((row) => row.transcriptionStatus === "in_arbeit").map((row) => row._id)),
+    result.rows.some((row) => row.transcriptionStatus === "wartend") ? queueHalt() : Promise.resolve(null),
+  ]);
 
   // Beobachtet werden wartende und laufende Aufträge; „fehlgeschlagen“ ist endgültig.
+  // Ist die Warteschlange angehalten, ändert sich an wartenden nichts.
   const watched: WatchedRecording[] = result.rows
-    .filter((row) => row.transcriptionStatus === "wartend" || row.transcriptionStatus === "in_arbeit")
+    .filter(
+      (row) =>
+        row.transcriptionStatus === "in_arbeit" || (row.transcriptionStatus === "wartend" && !halt),
+    )
     .map((row) => ({
       id: row._id,
       status: row.transcriptionStatus,
@@ -166,7 +171,7 @@ export default async function AufnahmenPage({
       <TranscriptionWatcher entries={watched} />
 
       <RecordingsTable
-        rows={result.rows.map((row) => toTableRow(row, progress.get(row._id)))}
+        rows={result.rows.map((row) => toTableRow(row, progress.get(row._id), halt))}
         sortKey={values.sort}
         sortDir={values.dir}
         query={values.q}
@@ -222,6 +227,7 @@ export default async function AufnahmenPage({
 function toTableRow(
   row: Awaited<ReturnType<typeof listRecordings>>["rows"][number],
   progress: JobProgress | undefined,
+  halt: QueueHalt,
 ): TableRow {
   return {
     transcriptionTiming: {
@@ -233,6 +239,7 @@ function toTableRow(
       progressDone: progress?.progressDone ?? null,
       progressTotal: progress?.progressTotal ?? null,
       updatedAt: progress?.updatedAt ?? row.transcriptionStartedAt,
+      halt,
     },
     _id: row._id,
     callAtUtc: row.callAtUtc,

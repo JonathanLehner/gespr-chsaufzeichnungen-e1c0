@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { formatAgo, formatClock, formatDateTime } from "@/lib/time";
-import type { TranscriptionStatus } from "@/lib/types";
+import { haltText } from "@/lib/queue-halt";
+import type { QueueHalt, TranscriptionStatus } from "@/lib/types";
 
 export type TranscriptionTiming = {
   status: TranscriptionStatus;
@@ -15,12 +16,16 @@ export type TranscriptionTiming = {
   progressTotal: number | null;
   /** Letzter gesicherter Fortschritt eines laufenden Auftrags. */
   updatedAt: string | null;
+  /** Angehaltene Warteschlange; ersetzt bei wartenden Aufträgen die Zeitangabe. */
+  halt?: QueueHalt;
 };
+
 
 /** Text hinter dem Status, z. B. „nächster Versuch 17:10“ oder „Abschnitt 3/7 · aktualisiert vor 1 Min.“ */
 export function timingText(timing: TranscriptionTiming, nowMs: number): string {
   switch (timing.status) {
     case "wartend": {
+      if (timing.halt) return haltText(timing.halt);
       const retry = timing.nextAttemptAt && Date.parse(timing.nextAttemptAt) > nowMs;
       const parts = [
         retry

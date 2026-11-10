@@ -233,9 +233,9 @@ Dienst bearbeitet also beide.
 | --- | --- | --- |
 | `MONGODB_URI` | ja | Datenbank mit `jobs`, `recordings`, Transkripten |
 | `CLAWCORP_API_KEY` | ja | Gemini über die Plattform |
-| `TRANSCRIBER_CONCURRENCY` | nein | gleichzeitig bearbeitete Aufträge je Instanz, Standard 2, höchstens 8 |
-| `TRANSCRIBER_GEMINI_CONCURRENCY` | nein | gleichzeitige Anfragen an Gemini über **alle** Instanzen, Standard 2 |
-| `TRANSCRIBER_GEMINI_GAP_MS` | nein | Mindestabstand zwischen zwei Anfragestarts über alle Instanzen, Standard 4000 |
+| `TRANSCRIBER_CONCURRENCY` | nein | gleichzeitig bearbeitete Aufträge je Instanz, Standard 2, höchstens 8 (im Dashboard gespeicherte Werte gehen vor) |
+| `TRANSCRIBER_GEMINI_CONCURRENCY` | nein | gleichzeitige Anfragen an Gemini über **alle** Instanzen, Standard 2 (Dashboard geht vor) |
+| `TRANSCRIBER_GEMINI_GAP_MS` | nein | Mindestabstand zwischen zwei Anfragestarts über alle Instanzen, Standard 4000 (Dashboard geht vor) |
 | `TRANSCRIBER_GEMINI_URL` | nein | nur für lokale Tests (nachgebildeter Dienst), sonst leer lassen |
 
 - **Übernahme**: atomar per `findOneAndUpdate` (wartend, fällige Wiederholung oder verwaiste
@@ -253,14 +253,31 @@ Dienst bearbeitet also beide.
   behebt: Audiodatei fehlt (404/410), ist leer oder lässt sich nicht dekodieren, Aufnahme gelöscht.
   Die Meldung nennt die genaue Ursache. Beim Start reiht der Dienst ältere, wegen vorübergehender
   Fehler beendete Aufträge wieder ein. „Erneut starten“ setzt den Auftrag auf `wartend` zurück.
+- **Kostenlimit-Sperre**: Meldet Gemini „monthly spending limit“ (als 502 von `/gemini`), setzt
+  der Dienst `spendingBlock` im Dokument der Drossel (Grund, Beginn, Ende, auslösende Aufnahme).
+  Ab dann vergibt die Drossel keinem Platz einer Instanz mehr eine Anfrage; laufende Aufträge
+  gehen mit gesichertem Zwischenstand zurück auf `wartend`, ohne dass ein Versuch zählt und ohne
+  `nextAttemptAt`, behalten also ihren Platz. Die Sperre endet am Monatsersten 00:00 Uhr
+  Europe/Zurich (die Drossel löscht sie dann selbst) oder mit „Sperre aufheben“ im Dashboard. Tritt
+  der Fehler am Monatsersten selbst auf (der Abrechnungsmonat des Anbieters wechselt womöglich
+  später), dauert die Sperre nur eine Stunde.
+- **Steuerung** (`/admin/transkription`, nur Admins): Zustand (läuft, pausiert, gesperrt),
+  Instanzen mit letztem Lebenszeichen, tatsächliche Anfragerate, Warteschlange je Status, ältester
+  wartender Auftrag, geplante Versuche, letzte Fehler. Aktionen: Warteschlange pausieren und
+  fortsetzen (`manualPause`), Sperre aufheben, Grenzen speichern (`settings`: gleichzeitige
+  Anfragen, Mindestabstand, Aufträge je Instanz; gelten ohne Neustart), einzelne Aufnahme jetzt
+  versuchen oder neu einreihen, alle fehlgeschlagenen neu einreihen, Aufnahme nach vorne stellen
+  (`priority` am Auftrag). Jede Änderung erhöht `controlVersion`; alle Instanzen sehen sie per
+  Change Stream sofort. Bei Pause oder Sperre zeigen wartende Aufnahmen in `/aufnahmen` und auf
+  der Detailseite „Vom Admin pausiert“ bzw. „Derzeit pausiert wegen API-Limit (bis …)“.
 - **Drossel** (`transcriber/limiter.ts`, Sammlung `transcriber_limiter`): Alle Instanzen
   (Staging und Produktion teilen die Datenbank) teilen sich eine Grenze: höchstens
   `TRANSCRIBER_GEMINI_CONCURRENCY` Anfragen gleichzeitig und `TRANSCRIBER_GEMINI_GAP_MS` zwischen
   zwei Starts, atomar vergeben per `findOneAndUpdate` mit Pipeline. Nach Zeitüberschreitung oder
   5xx ruht die ganze Spur 30 s (anhaltend je 60 s) und läuft dann mit einer Anfrage zugleich an,
-  bis drei in Folge gelingen. Das Admin-Dashboard zeigt Rate, Grenzen und Pause; der Dienst
+  bis drei in Folge gelingen. `/admin/transkription` zeigt Rate, Grenzen und Pause; der Dienst
   protokolliert die Rate alle fünf Minuten.
-- **Reihenfolge**: Jeder Platz wechselt bei jeder Übernahme zwischen dem neuesten und dem ältesten
+- **Reihenfolge**: Aufträge mit `priority` („Nach vorne“) kommen zuerst. Sonst wechselt jeder Platz bei jeder Übernahme zwischen dem neuesten und dem ältesten
   fälligen Auftrag. Ein neuer Upload wartet damit höchstens auf den nächsten freien Platz statt
   hinter dem gesamten Rückstand eines Massen-Uploads, und der Rückstand (inklusive Wiederholungen
   und verwaister Aufträge, die alt sind) läuft trotzdem gleichmässig weiter ab.
@@ -280,6 +297,7 @@ Prüfungen gegen eine Wegwerf-Datenbank (nie Produktion; die Sammlungen werden g
 TEST_MONGODB_URI="mongodb://localhost:27017/test?directConnection=true" npx tsx scripts/check-transcriber-claim.mts
 TEST_MONGODB_URI=... npx tsx scripts/check-gemini-limiter.mts
 TEST_MONGODB_URI=... npx tsx scripts/check-transcriber-retry.mts   # rund 4 min, zwei Instanzen gegen nachgebildeten Dienst
+TEST_MONGODB_URI=... npx tsx scripts/check-spending-block.mts      # rund 2 min: Kostenlimit-Sperre, Freigabe, Monatswechsel, Pause, Nach vorne, Grenzen
 ```
 
 ```bash

@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { signPlaybackToken } from "@/lib/audio";
 import { Collections, findById } from "@/lib/db";
 import { getRecording, listComments, listRatings } from "@/lib/recordings";
-import { jobProgress, loadTranscript } from "@/lib/transcription";
+import { jobProgress, loadTranscript, queueHalt } from "@/lib/transcription";
 import { formatDateTime, formatDateTimeWithSeconds, formatDuration, renderTimestamp } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { RecordingPlayerPanel } from "@/components/recording-player-panel";
@@ -14,6 +14,7 @@ import { RatingPanel } from "@/components/rating-panel";
 import { DeletionFlagButton } from "@/components/deletion-flag";
 import { TranscriptionWatcher } from "@/components/transcription-watcher";
 import { TranscriptionStatusLine } from "@/components/transcription-status-line";
+import { haltText } from "@/lib/queue-halt";
 import type { Job } from "@/lib/types";
 
 export async function generateMetadata({
@@ -42,12 +43,13 @@ export default async function AufnahmeDetailPage({
   const recording = await getRecording(id);
   if (!recording) notFound();
 
-  const [segments, comments, ratings, job, progressById] = await Promise.all([
+  const [segments, comments, ratings, job, progressById, halt] = await Promise.all([
     recording.transcriptionStatus === "abgeschlossen" ? loadTranscript(id) : Promise.resolve([]),
     listComments(id),
     listRatings(id),
     findById<Job>(Collections.jobs, id),
     jobProgress(recording.transcriptionStatus === "in_arbeit" ? [id] : []),
+    recording.transcriptionStatus === "wartend" ? queueHalt() : Promise.resolve(null),
   ]);
   const progress = progressById.get(id);
   const renderedAt = renderTimestamp();
@@ -60,6 +62,7 @@ export default async function AufnahmeDetailPage({
     recording.transcriptionStatus === "wartend" || recording.transcriptionStatus === "in_arbeit";
   const nextAttemptAt = recording.transcriptionNextAttemptAt ?? job?.nextAttemptAt ?? null;
   const retryPending =
+    !halt &&
     recording.transcriptionStatus === "wartend" &&
     !!nextAttemptAt &&
     Date.parse(nextAttemptAt) > renderedAt;
@@ -76,6 +79,7 @@ export default async function AufnahmeDetailPage({
     progressDone: progress?.progressDone ?? null,
     progressTotal: progress?.progressTotal ?? null,
     updatedAt: progress?.updatedAt ?? recording.transcriptionStartedAt,
+    halt,
   };
 
   const metadata: [string, React.ReactNode][] = [
@@ -193,7 +197,7 @@ export default async function AufnahmeDetailPage({
         </div>
       )}
 
-      {pending && (
+      {pending && !(recording.transcriptionStatus === "wartend" && halt) && (
         <TranscriptionWatcher
           entries={[
             {
@@ -213,6 +217,7 @@ export default async function AufnahmeDetailPage({
           status={recording.transcriptionStatus}
           errorMessage={recording.transcriptionError}
           nextAttemptLabel={nextAttemptLabel}
+          haltMessage={recording.transcriptionStatus === "wartend" && halt ? haltText(halt) : null}
           lastAttemptAt={recording.transcriptionFinishedAt}
           gaps={recording.transcriptionGaps ?? []}
           alignment={recording.transcriptionAlignment ?? null}

@@ -34,6 +34,14 @@
  *    gespeichert und der Auftrag als `wartend` freigegeben.
  *  - Jeder Dienst schreibt sein Lebenszeichen nach `transcriber_workers`
  *    (Anzeige im Admin-Dashboard).
+ *  - Steuerung aus dem Admin-Dashboard (Dokument der Drossel): gespeicherte
+ *    Grenzen und Aufträge je Instanz gelten ohne Neustart. Bei einer Pause
+ *    durch den Admin oder der Sperre nach dem Kostenlimit („monthly spending
+ *    limit“) übernimmt kein Platz einen Auftrag, und laufende Aufträge gehen
+ *    nach ihrer laufenden Anfrage mit gesichertem Zwischenstand zurück in die
+ *    Warteschlange, ohne dass ein Versuch gezählt wird. Die Sperre endet am
+ *    Monatsersten (Europe/Zurich) oder mit der Freigabe im Dashboard.
+ *  - „Nach vorne“ im Dashboard setzt `priority`; solche Aufträge kommen zuerst.
  *
  * Die Audiodatei wird über ihre Adresse geholt (`/api/dateien/<schlüssel>` der
  * Anwendung, die aus dem R2-Bucket liefert) und mit ffmpeg in Abschnitte von
@@ -47,15 +55,19 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { MongoClient, type ChangeStream, type Collection } from "mongodb";
-import { AbortedWhileWaiting, GeminiLimiter } from "./limiter";
+import { AbortedWhileWaiting, GeminiLimiter, QueueHalted } from "./limiter";
 import { alignTranscript } from "./shared/forced-alignment";
 import {
   HEARTBEAT_MS,
   LIMITER_COLLECTION,
+  LIMITER_ID,
+  SETTINGS_LIMITS,
   STALE_LOCK_MS,
   WORKERS_COLLECTION,
+  activeBlock,
   claimableFilter,
   iso,
+  isSpendingLimitError,
   isTransientError,
   nextAttemptAfter,
   scheduledRetryFilter,
@@ -126,6 +138,8 @@ type JobDoc = {
   /** Beim Beenden eines Dienstes freigegeben; wird an derselben Stelle fortgesetzt. */
   paused?: boolean | null;
   staleClaims?: number;
+  /** „Nach vorne“ im Dashboard: höhere Werte kommen zuerst. */
+  priority?: number | null;
   lastError?: string | null;
   /** Endgültig fehlgeschlagen; wird nicht automatisch wiederholt. */
   permanent?: boolean | null;
@@ -171,7 +185,7 @@ function intEnv(name: string, fallback: number, min: number, max: number): numbe
   return Number.isFinite(value) && value >= min ? Math.min(value, max) : fallback;
 }
 
-const concurrency = () => intEnv("TRANSCRIBER_CONCURRENCY", 2, 1, 8);
+const concurrency = () => intEnv("TRANSCRIBER_CONCURRENCY", 2, 1, SETTINGS_LIMITS.jobsPerInstance.max);
 /** Gleichzeitige Anfragen an den Dienst, über alle Instanzen zusammen. */
 const geminiConcurrency = () => intEnv("TRANSCRIBER_GEMINI_CONCURRENCY", 2, 1, 8);
 /** Mindestabstand zwischen zwei Anfragestarts, über alle Instanzen zusammen. */
@@ -266,6 +280,72 @@ function watchJobs(db: Db): () => Promise<void> {
   };
 }
 
+/* --------------------------------------------------------------- Steuerung */
+
+type Control = {
+  halted: "pausiert" | "gesperrt" | null;
+  /** Ende der Sperre (Monatswechsel); danach wird ohne Freigabe weitergearbeitet. */
+  haltedUntil: number | null;
+  jobsPerInstance: number;
+};
+
+let control: Control = { halted: null, haltedUntil: null, jobsPerInstance: 2 };
+
+/** Liest Pause, Sperre und Aufträge je Instanz aus dem Dokument der Drossel. */
+async function refreshControl(db: Db): Promise<Control> {
+  const doc = await db.limiter.findOne(
+    { _id: LIMITER_ID },
+    { projection: { manualPause: 1, spendingBlock: 1, settings: 1 } },
+  );
+  const block = activeBlock(doc);
+  const next: Control = {
+    halted: block ? "gesperrt" : doc?.manualPause ? "pausiert" : null,
+    haltedUntil: block ? Date.parse(block.until) : null,
+    jobsPerInstance: doc?.settings?.jobsPerInstance ?? concurrency(),
+  };
+  if (next.halted !== control.halted || next.jobsPerInstance !== control.jobsPerInstance) {
+    log(
+      next.halted === "gesperrt"
+        ? `Gesperrt wegen Kostenlimit bis ${block?.until}.`
+        : next.halted === "pausiert"
+          ? "Vom Admin pausiert."
+          : `Warteschlange läuft, ${next.jobsPerInstance} Aufträge je Instanz.`,
+    );
+  }
+  control = next;
+  return next;
+}
+
+/** Weckt alle Plätze, sobald das Dashboard die Steuerung ändert (`controlVersion`). */
+function watchControl(db: Db): () => Promise<void> {
+  let stream: ChangeStream | null = null;
+  let closed = false;
+  const open = () => {
+    if (closed) return;
+    try {
+      stream = db.limiter.watch([
+        { $match: { "updateDescription.updatedFields.controlVersion": { $exists: true } } },
+      ]);
+    } catch {
+      return;
+    }
+    stream.on("change", () => {
+      refreshControl(db)
+        .catch((error) => log(`Steuerung nicht gelesen (${errorText(error)})`))
+        .finally(() => wake.notify());
+    });
+    stream.on("error", () => {
+      stream?.close().catch(() => undefined);
+      if (!closed) setTimeout(open, IDLE_MAX_MS).unref();
+    });
+  };
+  open();
+  return async () => {
+    closed = true;
+    await stream?.close().catch(() => undefined);
+  };
+}
+
 /** Zeit bis zur nächsten bekannten Fälligkeit: Wiederholung oder ablaufende Sperre. */
 async function msUntilNextDue(db: Db): Promise<number> {
   const limit = changeStreamActive ? IDLE_MAX_MS : IDLE_FALLBACK_MS;
@@ -296,7 +376,7 @@ async function claimNext(db: Db, lockId: string, newestFirst: boolean): Promise<
   return db.jobs.findOneAndUpdate(
     claimableFilter(),
     { $set: { status: "in_arbeit", lockedAt: iso(), lockId, workerId: WORKER_ID } },
-    { sort: { createdAt: newestFirst ? -1 : 1 }, returnDocument: "before" },
+    { sort: { priority: -1, createdAt: newestFirst ? -1 : 1 }, returnDocument: "before" },
   );
 }
 
@@ -307,6 +387,9 @@ class PermanentError extends Error {}
 
 /** Inhaltlicher Fehler einer einzelnen Anfrage (ungültige Antwort, 400, 413). */
 class ContentError extends Error {}
+
+/** Monatliches Kostenlimit des Kontos erreicht: sperrt alle Anfragen. */
+class SpendingLimitError extends Error {}
 
 async function download(url: string, signal: AbortSignal): Promise<Uint8Array> {
   let res: Response;
@@ -408,6 +491,7 @@ async function requestTranscript(
       /* Rohtext verwenden */
     }
     const failure = `/gemini fehlgeschlagen (${res.status}): ${message}`;
+    if (isSpendingLimitError(message)) throw new SpendingLimitError(failure);
     // 400, 413, 415, 422 betreffen diese eine Anfrage; alles andere ist eine Störung des Dienstes.
     if ([400, 413, 415, 422].includes(res.status) && !isTransientError(message)) throw new ContentError(failure);
     throw new Error(failure);
@@ -426,7 +510,7 @@ class LockLost extends Error {}
 let limiter: GeminiLimiter;
 
 /** Eine Anfrage an den Dienst, eingereiht in die gemeinsame Drossel. */
-async function throttledTranscript(prompt: string, audio: string, signal: AbortSignal) {
+async function throttledTranscript(prompt: string, audio: string, signal: AbortSignal, recordingId: string) {
   const lease = await limiter.acquire(signal);
   try {
     const result = await requestTranscript(prompt, audio, signal);
@@ -434,6 +518,13 @@ async function throttledTranscript(prompt: string, audio: string, signal: AbortS
     return result;
   } catch (error) {
     const reason = errorText(error);
+    if (error instanceof SpendingLimitError) {
+      // Erst sperren, dann den Platz freigeben: keine Instanz startet dazwischen eine Anfrage.
+      await limiter.block(reason, recordingId);
+      await limiter.recordError(recordingId, reason).catch(() => undefined);
+      await limiter.release(lease, { ok: false, reason }).catch(() => undefined);
+      throw new QueueHalted("gesperrt");
+    }
     await limiter
       .release(lease, signal.aborted ? { ok: false, aborted: true } : { ok: false, transient: isTransientError(reason), reason })
       .catch((releaseError) => log(`Drossel nicht freigegeben (${errorText(releaseError)})`));
@@ -469,7 +560,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const done = await db.jobs.updateOne(own, {
       $set: {
         status, finishedAt: closedAt, nextAttemptAt: null, lastError, permanent: status === "fehlgeschlagen",
-        lockedAt: null, lockId: null, paused: null, staleClaims: 0, progressAt: null,
+        lockedAt: null, lockId: null, paused: null, staleClaims: 0, progressAt: null, priority: null,
         ...progressFields(null),
       },
     });
@@ -523,6 +614,31 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     await mirror({ transcriptionStatus: "wartend" });
     const doneCount = progress?.chunks.filter(Boolean).length ?? 0;
     return { label: `freigegeben bei ${doneCount}/${progress?.chunkCount ?? "?"} Abschnitten`, ok: false };
+  };
+
+  /**
+   * Warteschlange angehalten (Admin-Pause oder Kostenlimit): Der Auftrag geht
+   * mit gesichertem Zwischenstand und unverändertem Versuchszähler zurück und
+   * behält seinen Platz (`createdAt`, `priority`).
+   */
+  const requeueHalted = async (kind: QueueHalted["kind"]): Promise<Outcome> => {
+    const previous = before.attempts ?? 0;
+    const released = await db.jobs.updateOne(own, {
+      $set: {
+        status: "wartend", attempts: previous, nextAttemptAt: null, lockedAt: null, lockId: null,
+        workerId: null, paused: before.paused ?? null, staleClaims: before.staleClaims ?? 0,
+        startedAt: before.startedAt ?? null,
+        ...(progress ? progressFields(progress) : {}),
+      },
+    });
+    if (released.matchedCount === 0) return { label: "Auftrag wurde zwischenzeitlich zurückgesetzt", ok: false };
+    await mirror({
+      transcriptionStatus: "wartend",
+      transcriptionAttempts: previous,
+      transcriptionNextAttemptAt: null,
+      transcriptionError: before.lastError ?? null,
+    });
+    return { label: `angehalten (${kind}), zurück in die Warteschlange`, ok: false };
   };
 
   const recording = await db.recordings.findOne({ _id: id });
@@ -595,7 +711,9 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
 
     /** Letzte Störung eines Abschnitts; beendet den Lauf und stellt den Auftrag zurück. */
     let deferredBy: string | null = null;
-    const stopRun = () => interrupted() || deferredBy !== null;
+    /** Pause oder Sperre: Lauf endet, der Auftrag geht ohne gezählten Versuch zurück. */
+    let haltedBy: QueueHalted["kind"] | null = null;
+    const stopRun = () => interrupted() || deferredBy !== null || haltedBy !== null;
 
     let next = 0;
     const chunkWorker = async () => {
@@ -612,19 +730,26 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
             const bitrate = BITRATES[attempt - 1] ?? "12k";
             let audio = await encodeChunk(file, startMs, bitrate);
             if (audio.length > MAX_INLINE_CHARS) audio = await encodeChunk(file, startMs, "10k");
-            const part = await throttledTranscript(prompt, audio, signal);
+            const part = await throttledTranscript(prompt, audio, signal, id);
             result = { ...part, segments: shiftSegments(part.segments, startMs) };
             transientError = null;
           } catch (error) {
             if (interrupted() || error instanceof AbortedWhileWaiting) break;
+            if (error instanceof QueueHalted) {
+              haltedBy ??= error.kind;
+              break;
+            }
             log(`${id} Abschnitt ${index + 1}/${chunkCount}: Anlauf ${attempt} – ${errorText(error)}`);
+            await limiter
+              .recordError(id, `Abschnitt ${index + 1}/${chunkCount}: ${errorText(error)}`)
+              .catch(() => undefined);
             transientError = error instanceof ContentError ? null : errorText(error);
             if (transientError && attempt >= CHUNK_TRANSIENT_ATTEMPTS) break;
             if (attempt < CHUNK_ATTEMPTS) await sleep(CHUNK_RETRY_PAUSE_MS);
           }
         }
-        // Unterbrochen: Abschnitt bleibt offen für den nächsten Lauf.
-        if (!result && interrupted()) break;
+        // Unterbrochen oder angehalten: Abschnitt bleibt offen für den nächsten Lauf.
+        if (!result && (interrupted() || haltedBy)) break;
         if (!result && transientError) {
           // Störung: Abschnitt bleibt offen und wird beim nächsten Versuch nachgeholt.
           deferredBy ??= transientError;
@@ -643,6 +768,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, pending.length) }, chunkWorker));
     if (lost) throw new LockLost();
     if (stopping) return await pause();
+    if (haltedBy) return await requeueHalted(haltedBy);
     if (deferredBy) return await defer(deferredBy);
 
     const done = state.chunks.filter((chunk): chunk is NormalizedTranscript => chunk !== null);
@@ -692,6 +818,8 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       return { label: "Auftrag wurde zwischenzeitlich zurückgesetzt oder übernommen", ok: false };
     }
     if (stopping) return await pause();
+    if (error instanceof QueueHalted) return await requeueHalted(error.kind);
+    await limiter.recordError(id, errorText(error)).catch(() => undefined);
     if (error instanceof PermanentError) return await fail(error.message);
     return await defer(errorText(error));
   } finally {
@@ -731,6 +859,13 @@ async function writeHealth(db: Db, extra: Partial<WorkerDoc> = {}) {
 async function slot(db: Db, index: number): Promise<void> {
   let claims = 0;
   while (!stopping) {
+    // Angehalten oder dieser Platz liegt über den Aufträgen je Instanz: nichts übernehmen.
+    const current = await refreshControl(db).catch(() => control);
+    if (current.halted || index >= current.jobsPerInstance) {
+      const untilLift = current.haltedUntil ? current.haltedUntil - Date.now() + 1000 : Infinity;
+      await wake.wait(Math.max(1000, Math.min(changeStreamActive ? IDLE_MAX_MS : IDLE_FALLBACK_MS, untilLift)));
+      continue;
+    }
     // Abwechselnd neuester und ältester Auftrag; die Plätze beginnen versetzt.
     const newestFirst = (index + claims) % 2 === 0;
     const lockId = randomUUID();
@@ -810,7 +945,8 @@ async function main() {
     log,
   });
   await requeueTransientFailures(db);
-  const slots = concurrency();
+  await refreshControl(db);
+  const slots = control.jobsPerInstance;
   const startedAt = iso();
   await db.workers.updateOne(
     { _id: WORKER_ID },
@@ -830,23 +966,29 @@ async function main() {
     { upsert: true },
   );
   const beat = setInterval(() => {
-    writeHealth(db).catch((error) => log(`Lebenszeichen nicht geschrieben (${errorText(error)})`));
+    refreshControl(db)
+      .then(() => writeHealth(db, { concurrency: control.jobsPerInstance }))
+      .catch((error) => log(`Lebenszeichen nicht geschrieben (${errorText(error)})`));
   }, HEARTBEAT_MS);
   const rateLog = setInterval(() => {
     limiter.summary().then((line) => log(`Drossel: ${line}`), () => undefined);
   }, RATE_LOG_MS);
   const stopWatching = watchJobs(db);
+  const stopWatchingControl = watchControl(db);
   log(
     `Dienst ${WORKER_ID} gestartet, ${slots} Plätze, Drossel ${limiter.options.maxConcurrent} gleichzeitig ` +
-      `(alle Instanzen), ${limiter.options.minGapMs / 1000} s Abstand.`,
+      `(alle Instanzen), ${limiter.options.minGapMs / 1000} s Abstand (Standard, Dashboard-Werte gehen vor).`,
   );
 
   try {
-    await Promise.all(Array.from({ length: slots }, (_, index) => slot(db, index)));
+    // Alle möglichen Plätze laufen; über `jobsPerInstance` hinaus ruhen sie (änderbar im Dashboard).
+    const maxSlots = SETTINGS_LIMITS.jobsPerInstance.max;
+    await Promise.all(Array.from({ length: maxSlots }, (_, index) => slot(db, index)));
   } finally {
     clearInterval(beat);
     clearInterval(rateLog);
     await stopWatching();
+    await stopWatchingControl();
     await writeHealth(db, { stoppedAt: iso() }).catch(() => undefined);
     await client.close();
   }

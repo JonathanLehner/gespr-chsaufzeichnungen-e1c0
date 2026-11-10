@@ -86,7 +86,7 @@ export const LIMITER_RAMP_SUCCESSES = 3;
 export type LimiterLease = { id: string; workerId: string; startedAt: string; expiresAt: string };
 export type LimiterEvent = { at: string; ok: boolean; ms: number; transient?: boolean };
 
-export type LimiterDoc = {
+export type LimiterDoc = ControlFields & {
   _id: string;
   /** Laufende Anfragen; abgelaufene Einträge (abgestürzter Dienst) zählen nicht. */
   leases: LimiterLease[];
@@ -114,4 +114,105 @@ export function effectiveConcurrency(doc: Pick<LimiterDoc, "successStreak" | "ma
 /** Pause der ganzen Spur nach `streak` vorübergehenden Fehlern in Folge: 30 s, danach 60 s. */
 export function lanePauseMs(streak: number): number {
   return streak <= 1 ? 30_000 : 60_000;
+}
+
+/* ------------------------------------------------------------ Steuerung durch den Admin */
+
+/**
+ * Die Steuerung liegt im selben Dokument wie die Drossel (`LIMITER_ID`), damit
+ * `acquire` Pause und Sperre im selben atomaren Schritt prüft, in dem es einen
+ * Platz vergibt: Nach dem Setzen der Sperre startet keine Instanz mehr eine
+ * Anfrage.
+ */
+export type QueueSettings = {
+  /** Gleichzeitige Anfragen an den Dienst, alle Instanzen zusammen. */
+  maxConcurrent: number;
+  /** Mindestabstand zwischen zwei Anfragestarts. */
+  minGapMs: number;
+  /** Aufträge, die jede Instanz gleichzeitig bearbeitet. */
+  jobsPerInstance: number;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+export const SETTINGS_LIMITS = {
+  maxConcurrent: { min: 1, max: 8 },
+  minGapMs: { min: 0, max: 120_000 },
+  jobsPerInstance: { min: 1, max: 8 },
+} as const;
+
+export type ManualPause = { at: string; by: string };
+
+/** Kostenlimit des Dienstes erreicht: keine Anfragen bis `until` oder bis zur Freigabe. */
+export type SpendingBlock = {
+  startedAt: string;
+  until: string;
+  reason: string;
+  recordingId: string | null;
+  workerId: string | null;
+};
+
+export type QueueErrorEntry = { at: string; recordingId: string | null; message: string };
+
+export type ControlFields = {
+  manualPause?: ManualPause | null;
+  spendingBlock?: SpendingBlock | null;
+  settings?: QueueSettings | null;
+  /** Wird bei jeder Änderung der Steuerung erhöht; weckt alle Instanzen (Change Stream). */
+  controlVersion?: number;
+  /** Die letzten Fehler aller Instanzen, neueste zuletzt. */
+  errors?: QueueErrorEntry[];
+};
+
+export const RECENT_ERRORS = 50;
+
+/** Meldung des Dienstes, wenn das monatliche Kostenlimit des Kontos erreicht ist. */
+export function isSpendingLimitError(message: string): boolean {
+  return /spending limit/i.test(message);
+}
+
+/** Erster Tag des Folgemonats, 00:00 Uhr in Europe/Zurich, als UTC-Zeitpunkt. */
+export function nextMonthStartZurich(now = Date.now()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Zurich",
+    year: "numeric",
+    month: "numeric",
+  }).formatToParts(new Date(now));
+  const year = Number(parts.find((p) => p.type === "year")?.value);
+  const month = Number(parts.find((p) => p.type === "month")?.value); // 1–12
+  const naive = Date.UTC(year, month, 1); // Monat ist 0-basiert: `month` = Folgemonat
+  // Zürich liegt 1 h (Winter) oder 2 h (Sommer) vor UTC; am Monatsersten gilt die Zeit dieses Tages.
+  const offsetAt = (utc: number) => {
+    const p = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Europe/Zurich", hour12: false, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(utc));
+    const get = (type: string) => Number(p.find((x) => x.type === type)?.value);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute")) - utc;
+  };
+  return naive - offsetAt(naive - offsetAt(naive));
+}
+
+/** Beginn des laufenden Monats in Europe/Zurich. */
+function monthStartZurich(now: number): number {
+  // Der Monatserste dieses Monats ist der Folgemonatsbeginn, von 32 Tagen davor aus gerechnet.
+  const next = nextMonthStartZurich(now);
+  return nextMonthStartZurich(next - 32 * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * Ende einer Sperre wegen Kostenlimit: Beginn des nächsten Kalendermonats
+ * (Europe/Zurich). Tritt der Fehler am ersten Tag eines Monats auf, hat der
+ * Dienst seinen Monat womöglich noch nicht gewechselt (andere Zeitzone);
+ * dann wird nach einer Stunde erneut versucht statt einen Monat zu warten.
+ */
+export function spendingBlockUntil(now = Date.now()): string {
+  if (now < monthStartZurich(now) + 24 * 60 * 60 * 1000) return iso(now + 60 * 60 * 1000);
+  return iso(nextMonthStartZurich(now));
+}
+
+/** Aktive Sperre (abgelaufene zählen nicht mehr). */
+export function activeBlock(doc: ControlFields | null | undefined, now = Date.now()): SpendingBlock | null {
+  const block = doc?.spendingBlock;
+  return block && block.until > iso(now) ? block : null;
 }

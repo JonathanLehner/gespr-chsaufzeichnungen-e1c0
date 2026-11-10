@@ -13,13 +13,21 @@
  * Die Vergabe ist ein einziges `findOneAndUpdate` mit Aggregations-Pipeline:
  * Prüfen und Eintragen geschehen atomar, zwei Instanzen können die Grenze also
  * nicht gemeinsam überschreiten.
+ *
+ * Im selben Dokument liegt die Steuerung aus dem Admin-Dashboard: Grenzen
+ * (`settings`, sonst die Umgebungsvariablen), Pause durch den Admin
+ * (`manualPause`) und die Sperre nach dem Kostenlimit (`spendingBlock`). Ist
+ * eines davon aktiv, vergibt `acquire` keinen Platz mehr und wirft
+ * `QueueHalted`; eine abgelaufene Sperre löscht es dabei selbst.
  */
 import { randomUUID } from "node:crypto";
 import type { Collection } from "mongodb";
 import {
   LIMITER_ID,
   LIMITER_RAMP_SUCCESSES,
+  RECENT_ERRORS,
   iso,
+  spendingBlockUntil,
   lanePauseMs,
   type LimiterDoc,
   type LimiterLease,
@@ -30,6 +38,7 @@ const FULL_RETRY_MS = 2000;
 const RECENT_EVENTS = 200;
 
 export type LimiterOptions = {
+  /** Standardwerte, solange im Dashboard keine Grenzen gespeichert sind. */
   maxConcurrent: number;
   minGapMs: number;
   /** Höchstdauer einer Anfrage; danach verfällt der Platz von selbst. */
@@ -38,6 +47,13 @@ export type LimiterOptions = {
 };
 
 export class AbortedWhileWaiting extends Error {}
+
+/** Die Warteschlange ist angehalten (Admin-Pause oder Kostenlimit); der Auftrag geht zurück. */
+export class QueueHalted extends Error {
+  constructor(readonly kind: "pausiert" | "gesperrt") {
+    super(kind === "gesperrt" ? "Gesperrt wegen Kostenlimit des Dienstes." : "Vom Admin pausiert.");
+  }
+}
 
 export class GeminiLimiter {
   private wakeLocal: (() => void)[] = [];
@@ -65,7 +81,7 @@ export class GeminiLimiter {
         $cond: [
           { $lt: [{ $ifNull: ["$successStreak", LIMITER_RAMP_SUCCESSES] }, LIMITER_RAMP_SUCCESSES] },
           1,
-          maxConcurrent,
+          "$maxConcurrent",
         ],
       };
       const doc = await this.collection.findOneAndUpdate(
@@ -76,8 +92,16 @@ export class GeminiLimiter {
               leases: {
                 $filter: { input: { $ifNull: ["$leases", []] }, cond: { $gt: ["$$this.expiresAt", nowIso] } },
               },
-              maxConcurrent,
-              minGapMs,
+              maxConcurrent: { $ifNull: ["$settings.maxConcurrent", maxConcurrent] },
+              minGapMs: { $ifNull: ["$settings.minGapMs", minGapMs] },
+              // Abgelaufene Sperre (Monatswechsel) aufheben.
+              spendingBlock: {
+                $cond: [
+                  { $gt: [{ $ifNull: ["$spendingBlock.until", ""] }, nowIso] },
+                  "$spendingBlock",
+                  null,
+                ],
+              },
             },
           },
           {
@@ -87,6 +111,8 @@ export class GeminiLimiter {
                   { $lt: [{ $size: "$leases" }, limit] },
                   { $lte: [{ $ifNull: ["$nextStartAt", ""] }, nowIso] },
                   { $lte: [{ $ifNull: ["$pausedUntil", ""] }, nowIso] },
+                  { $eq: [{ $ifNull: ["$manualPause", null] }, null] },
+                  { $eq: ["$spendingBlock", null] },
                 ],
               },
             },
@@ -94,7 +120,18 @@ export class GeminiLimiter {
           {
             $set: {
               leases: { $cond: ["$granted", { $concatArrays: ["$leases", [{ $literal: lease }]] }, "$leases"] },
-              nextStartAt: { $cond: ["$granted", iso(now + minGapMs), "$nextStartAt"] },
+              nextStartAt: {
+                $cond: [
+                  "$granted",
+                  {
+                    $dateToString: {
+                      date: { $add: [{ $literal: new Date(now) }, "$minGapMs"] },
+                      format: "%Y-%m-%dT%H:%M:%S.%LZ",
+                    },
+                  },
+                  "$nextStartAt",
+                ],
+              },
             },
           },
           { $unset: "granted" },
@@ -102,6 +139,8 @@ export class GeminiLimiter {
         { upsert: true, returnDocument: "after" },
       );
       if (doc?.leases.some((entry) => entry.id === lease.id)) return lease;
+      if (doc?.spendingBlock) throw new QueueHalted("gesperrt");
+      if (doc?.manualPause) throw new QueueHalted("pausiert");
 
       const waits = [doc?.pausedUntil, doc?.nextStartAt]
         .map((at) => (at ? Date.parse(at) - now : 0))
@@ -155,6 +194,46 @@ export class GeminiLimiter {
       this.wakeLocal = [];
       for (const resolve of waiting) resolve();
     }
+  }
+
+  /**
+   * Kostenlimit erreicht: sperrt alle Anfragen aller Instanzen bis zum
+   * nächsten Monat oder bis zur Freigabe im Dashboard. Eine bestehende Sperre
+   * bleibt unverändert (Beginn und Ende der ersten Meldung zählen).
+   */
+  async block(reason: string, recordingId: string | null): Promise<void> {
+    const now = Date.now();
+    const result = await this.collection.updateOne(
+      { _id: LIMITER_ID, $or: [{ spendingBlock: null }, { "spendingBlock.until": { $lte: iso(now) } }] },
+      {
+        $set: {
+          spendingBlock: {
+            startedAt: iso(now),
+            until: spendingBlockUntil(now),
+            reason: reason.slice(0, 300),
+            recordingId,
+            workerId: this.workerId,
+          },
+        },
+        $inc: { controlVersion: 1 },
+      },
+    );
+    if (result.modifiedCount > 0) this.options.log(`Kostenlimit erreicht, alle Anfragen gesperrt (${reason})`);
+  }
+
+  /** Fehler für die Liste im Admin-Dashboard. */
+  async recordError(recordingId: string | null, message: string): Promise<void> {
+    await this.collection.updateOne(
+      { _id: LIMITER_ID },
+      {
+        $push: {
+          errors: {
+            $each: [{ at: iso(), recordingId, message: message.slice(0, 400) }],
+            $slice: -RECENT_ERRORS,
+          },
+        },
+      },
+    );
   }
 
   /** Tatsächliche Rate der letzten zehn Minuten, für das Protokoll. */

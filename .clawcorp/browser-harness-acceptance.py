@@ -1146,7 +1146,7 @@ except Exception as exc:
 
 # ---------------------------------------------------------------- step 28
 try:
-    go("/admin")
+    go("/admin/transkription")
     sections = texts("h3")
     lower = [s.lower() for s in sections]
     running = any("laufend" in s or "wartend" in s for s in lower)

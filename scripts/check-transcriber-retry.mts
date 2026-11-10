@@ -1,7 +1,7 @@
 /**
  * Ende-zu-Ende-Prüfung des Transkriptionsdienstes gegen eine Wegwerf-Datenbank
  * und einen nachgebildeten Transkriptionsdienst:
- *  - Störungen (504, Kostenlimit-502) beenden keinen Auftrag; er bleibt
+ *  - Störungen (504, 502) beenden keinen Auftrag; er bleibt
  *    „wartend“ mit nächstem Versuch und wird ohne Lücke abgeschlossen.
  *  - Fehlende und nicht dekodierbare Audiodateien enden endgültig mit einer
  *    Meldung, die die Ursache nennt.
@@ -42,10 +42,10 @@ const starts: number[] = [];
 let inFlight = 0;
 let maxInFlight = 0;
 let served = 0;
-/** Die ersten Anfragen scheitern: 504, dann das Kostenlimit als 502. */
+/** Die ersten Anfragen scheitern: 504, dann 502 (Kostenlimit: `check-spending-block.mts`). */
 const FAILURES = [
   { status: 504, body: { error: "Gateway Timeout" } },
-  { status: 502, body: { error: "Your project has exceeded its monthly spending limit (billing account)" } },
+  { status: 502, body: { error: "Bad Gateway" } },
   { status: 504, body: { error: "Gateway Timeout" } },
 ];
 const failureTimes: number[] = [];

@@ -56,3 +56,12 @@ __pycache__/
 .ruff_cache/
 .tox/
 .turbo/
+
+# Checkliste (exakte Einträge)
+.next/
+.open-next/
+.wrangler/
+.vercel/
+.env
+.env.local
+.env.*.local

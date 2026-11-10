@@ -15,6 +15,7 @@ export function RecordingPlayerPanel({
   status,
   errorMessage,
   nextAttemptLabel,
+  haltMessage = null,
   lastAttemptAt,
   gaps,
   alignment,
@@ -27,6 +28,8 @@ export function RecordingPlayerPanel({
   status: TranscriptionStatus;
   errorMessage: string | null;
   nextAttemptLabel: string | null;
+  /** Warteschlange angehalten (Pause oder API-Limit); nur bei wartenden Aufnahmen. */
+  haltMessage?: string | null;
   /** Zeitpunkt des letzten Versuchs – setzt die Schaltfläche nach einem neuen Fehlschlag zurück. */
   lastAttemptAt: string | null;
   /** Zeitbereiche ohne Text, weil der Dienst den Abschnitt nicht beantwortet hat. */
@@ -72,6 +75,7 @@ export function RecordingPlayerPanel({
             status={status}
             errorMessage={errorMessage}
             nextAttemptLabel={nextAttemptLabel}
+            haltMessage={haltMessage}
             lastAttemptAt={lastAttemptAt}
           />
         )}
@@ -118,12 +122,14 @@ function TranscriptPlaceholder({
   status,
   errorMessage,
   nextAttemptLabel,
+  haltMessage,
   lastAttemptAt,
 }: {
   recordingId: string;
   status: TranscriptionStatus;
   errorMessage: string | null;
   nextAttemptLabel: string | null;
+  haltMessage: string | null;
   lastAttemptAt: string | null;
 }) {
   if (status === "ohne_sprache") {
@@ -182,6 +188,18 @@ function TranscriptPlaceholder({
             </p>
           </details>
         )}
+      </section>
+    );
+  }
+
+  if (status === "wartend" && haltMessage) {
+    return (
+      <section className="card border-[#e6d3a4] bg-warn-soft p-5" role="status">
+        <h2 className="text-[14px] font-semibold text-warn">Transkription in der Warteschlange</h2>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-warn">
+          {haltMessage}. Die Aufnahme behält ihren Platz und wird danach automatisch transkribiert.
+          Anhören ist bereits jetzt möglich.
+        </p>
       </section>
     );
   }

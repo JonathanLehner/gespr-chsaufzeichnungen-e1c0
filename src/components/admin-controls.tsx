@@ -6,36 +6,9 @@ import {
   createPasswordResetLinkAction,
   deleteForeignCommentAction,
   hardDeleteRecordingAction,
-  retryTranscriptionAction,
   type ResetLinkResult,
 } from "@/app/actions/admin";
 import { formatDateTimeWithSeconds } from "@/lib/time";
-
-export function RetryButton({ recordingId }: { recordingId: string }) {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  const [message, setMessage] = useState<string | null>(null);
-
-  return (
-    <div>
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={pending}
-        onClick={() =>
-          startTransition(async () => {
-            const result = await retryTranscriptionAction(recordingId);
-            setMessage(result.message);
-            router.refresh();
-          })
-        }
-      >
-        {pending ? "Wird gestartet …" : "Erneut starten"}
-      </button>
-      {message && <p className="mt-1 text-[12px] text-ink-faint">{message}</p>}
-    </div>
-  );
-}
 
 /**
  * Erzeugt für ein Konto einen Link zum Zurücksetzen des Passworts. Der Link

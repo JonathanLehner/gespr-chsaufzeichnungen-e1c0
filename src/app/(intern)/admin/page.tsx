@@ -6,24 +6,18 @@ import { displayableLink } from "@/lib/mail-outbox";
 import { DELIVERY_LABELS, PROVIDER_LABELS } from "@/lib/mail-config";
 import { mailOverview } from "@/lib/mailer";
 import { getTemplateSettings } from "@/lib/settings";
-import { countByStatus, listAllComments, listJobs, listRecordings } from "@/lib/recordings";
+import { countByStatus, listAllComments, listRecordings } from "@/lib/recordings";
 import { formatDateTime, formatDateTimeWithSeconds } from "@/lib/time";
-import { StatusBadge } from "@/components/status";
+import { AdminTabs } from "@/components/admin-tabs";
 import { TemplateEditor } from "@/components/template-editor";
 import { MailSettingsEditor } from "@/components/mail-settings-editor";
 import {
   CommentDeleteButton,
   HardDeleteButton,
   ResetLinkButton,
-  RetryButton,
 } from "@/components/admin-controls";
-import { queueHealth, type QueueHealth } from "@/lib/transcription";
-import type {
-  MailDeliveryStatus,
-  MailOutboxEntry,
-  TranscriptionStatus,
-  User,
-} from "@/lib/types";
+import { queueHalt, queueHealth } from "@/lib/transcription";
+import type { MailDeliveryStatus, MailOutboxEntry, User } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Admin-Dashboard" };
 
@@ -48,10 +42,9 @@ export default async function AdminPage() {
     );
   }
 
-  const [settings, jobs, statusCounts, flagged, users, outbox, totalRecordings, mailSetup, health] =
+  const [settings, statusCounts, flagged, users, outbox, totalRecordings, mailSetup, health, halt] =
     await Promise.all([
       getTemplateSettings(),
-      listJobs(),
       countByStatus(),
       listRecordings({ loeschstatus: "nur_markiert", pageSize: 100, sort: "hochgeladen", dir: "desc" }),
       findMany<User>(Collections.users, {}),
@@ -59,6 +52,7 @@ export default async function AdminPage() {
       countDocuments(Collections.recordings, {}),
       mailOverview(),
       queueHealth(),
+      queueHalt(),
     ]);
 
   const [commentCount, ratingCount, commentOverview] = await Promise.all([
@@ -75,13 +69,6 @@ export default async function AdminPage() {
       ),
     ),
   );
-
-  const running = jobs.filter((job) => job.status === "in_arbeit" || job.status === "wartend");
-  const failed = jobs.filter((job) => job.status === "fehlgeschlagen");
-  const finished = jobs
-    .filter((job) => job.status === "abgeschlossen" || job.status === "ohne_sprache")
-    .sort((a, b) => (b.finishedAt ?? "").localeCompare(a.finishedAt ?? ""))
-    .slice(0, 10);
 
   // Der Reset-Link wird schon beim Laden entfernt und erreicht den Browser
   // dadurch gar nicht erst – die Anzeige weiter unten kann ihn nicht versehentlich
@@ -112,6 +99,7 @@ export default async function AdminPage() {
           Angemeldet als Superuser {user.email}. Dateinamensvorlage, Verarbeitungsaufträge und
           endgültige Löschungen werden hier gesteuert.
         </p>
+        <AdminTabs />
       </div>
 
       <section className="grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
@@ -134,57 +122,33 @@ export default async function AdminPage() {
       />
 
       <section className="card p-5">
-        <h2 className="text-[15px] font-semibold text-ink">Upload- und Transkriptionsaufträge</h2>
-
-        <WorkerHealthPanel health={health} />
-
-        <JobTable
-          title={`Laufend und wartend (${running.length})`}
-          empty="Keine offenen Aufträge."
-          rows={running.map((job) => ({
-            id: job.recordingId,
-            filename: job.originalFilename,
-            status: job.status,
-            created: job.createdAt,
-            started: job.startedAt,
-            finished: job.finishedAt,
-            attempts: job.attempts,
-            error: job.lastError,
-            action: null,
-          }))}
-        />
-
-        <JobTable
-          title={`Fehlgeschlagen (${failed.length})`}
-          empty="Keine fehlgeschlagenen Aufträge."
-          rows={failed.map((job) => ({
-            id: job.recordingId,
-            filename: job.originalFilename,
-            status: job.status,
-            created: job.createdAt,
-            started: job.startedAt,
-            finished: job.finishedAt,
-            attempts: job.attempts,
-            error: job.lastError,
-            action: <RetryButton recordingId={job.recordingId} />,
-          }))}
-        />
-
-        <JobTable
-          title={`Zuletzt abgeschlossen (${finished.length})`}
-          empty="Noch keine abgeschlossenen Aufträge."
-          rows={finished.map((job) => ({
-            id: job.recordingId,
-            filename: job.originalFilename,
-            status: job.status,
-            created: job.createdAt,
-            started: job.startedAt,
-            finished: job.finishedAt,
-            attempts: job.attempts,
-            error: null,
-            action: <RetryButton recordingId={job.recordingId} />,
-          }))}
-        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-ink">Transkription</h2>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-[13px] text-ink-soft">
+              {halt?.kind === "gesperrt" ? (
+                <span className="badge bg-bad-soft text-bad">Gesperrt wegen API-Limit</span>
+              ) : halt?.kind === "pausiert" ? (
+                <span className="badge bg-warn-soft text-warn">Pausiert</span>
+              ) : (
+                <span className="badge bg-ok-soft text-ok">Läuft</span>
+              )}
+              <span>
+                {health.queued.toLocaleString("de-CH")} bereit, {health.running} in Arbeit,{" "}
+                {health.workers.filter((worker) => worker.alive).length} Instanzen aktiv
+              </span>
+            </p>
+            {halt?.kind === "gesperrt" && (
+              <p className="mt-1 text-[12.5px] text-bad">
+                Seit {formatDateTimeWithSeconds(halt.since)}, hebt sich auf am{" "}
+                {formatDateTimeWithSeconds(halt.until)}.
+              </p>
+            )}
+          </div>
+          <Link href="/admin/transkription" className="btn btn-secondary">
+            Transkription verwalten
+          </Link>
+        </div>
       </section>
 
       <section className="card p-5">
@@ -427,209 +391,4 @@ function DeliveryBadge({ status }: { status: MailDeliveryStatus | undefined }) {
         ? "bg-bad-soft text-bad"
         : "bg-warn-soft text-warn";
   return <span className={`badge ${tone}`}>{DELIVERY_LABELS[status]}</span>;
-}
-
-type JobRow = {
-  id: string;
-  filename: string;
-  status: TranscriptionStatus;
-  created: string;
-  started: string | null;
-  finished: string | null;
-  attempts: number;
-  error: string | null;
-  action: React.ReactNode;
-};
-
-function WorkerHealthPanel({ health }: { health: QueueHealth }) {
-  const active = health.workers.filter((worker) => worker.alive);
-  const stats = [
-    { label: "Warteschlange", value: health.queued },
-    { label: "In Arbeit", value: health.running },
-    { label: "Wiederholung geplant", value: health.retryScheduled },
-    { label: "Erledigt (letzte Stunde)", value: health.doneLastHour },
-    { label: "Fehlgeschlagen (letzte Stunde)", value: health.failedLastHour },
-  ];
-
-  return (
-    <div className="mt-4">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h3 className="text-[12px] font-semibold uppercase tracking-wide text-ink-soft">
-          Transkriptionsdienst
-        </h3>
-        <WorkerBadge
-          alive={active.length > 0}
-          label={active.length > 1 ? `${active.length} Instanzen aktiv` : undefined}
-        />
-        <span className="text-[12px] text-ink-faint">
-          {health.lastHeartbeatAt
-            ? `Letztes Lebenszeichen: ${formatDateTimeWithSeconds(health.lastHeartbeatAt)}`
-            : "Noch kein Lebenszeichen"}
-        </span>
-      </div>
-
-      <div className="mt-3 grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
-        {stats.map((stat) => (
-          <div key={stat.label} className="bg-surface p-3">
-            <p className="text-xl font-semibold tabular-nums text-ink">
-              {stat.value.toLocaleString("de-CH")}
-            </p>
-            <p className="mt-0.5 text-[12px] leading-snug text-ink-faint">{stat.label}</p>
-          </div>
-        ))}
-      </div>
-
-      <LimiterPanel limiter={health.limiter} />
-
-      {health.workers.length > 0 && (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse">
-            <thead className="bg-canvas">
-              <tr>
-                <th className="th">Instanz</th>
-                <th className="th">Status</th>
-                <th className="th">Gestartet</th>
-                <th className="th">Letztes Lebenszeichen</th>
-                <th className="th">Plätze</th>
-                <th className="th">Laufend</th>
-                <th className="th">Erledigt</th>
-                <th className="th">Zurückgestellt</th>
-                <th className="th">Fehlgeschlagen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {health.workers.map((worker) => (
-                <tr key={worker.id}>
-                  <td className="td font-mono text-[11.5px]">{worker.id}</td>
-                  <td className="td">
-                    {worker.stoppedAt && !worker.alive ? (
-                      <span className="badge bg-canvas text-ink-soft">Beendet</span>
-                    ) : (
-                      <WorkerBadge alive={worker.alive} />
-                    )}
-                  </td>
-                  <td className="td whitespace-nowrap text-[12px]">
-                    {formatDateTimeWithSeconds(worker.startedAt)}
-                  </td>
-                  <td className="td whitespace-nowrap text-[12px]">
-                    {formatDateTimeWithSeconds(worker.lastHeartbeatAt)}
-                  </td>
-                  <td className="td tabular-nums">{worker.concurrency}</td>
-                  <td className="td tabular-nums">{worker.activeJobs.length}</td>
-                  <td className="td tabular-nums">{worker.processed}</td>
-                  <td className="td tabular-nums">{worker.deferred ?? 0}</td>
-                  <td className="td tabular-nums">{worker.failed}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Gemeinsame Drossel aller Instanzen: tatsächliche Rate und aktuelle Grenzen. */
-function LimiterPanel({ limiter }: { limiter: QueueHealth["limiter"] }) {
-  if (!limiter) return null;
-  const number = (value: number, digits = 1) =>
-    value.toLocaleString("de-CH", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-  const stats = [
-    { label: "Anfragen pro Minute (10 min)", value: number(limiter.perMinute) },
-    {
-      label:
-        limiter.allowedNow < limiter.maxConcurrent
-          ? `Laufend / erlaubt (Anlauf, sonst ${limiter.maxConcurrent})`
-          : "Laufend / erlaubt",
-      value: `${limiter.running} / ${limiter.allowedNow}`,
-    },
-    { label: "Mindestabstand zwischen Anfragen", value: `${number(limiter.minGapMs / 1000, 0)} s` },
-    { label: "Fehler (10 min)", value: String(limiter.failedLast10Min) },
-    {
-      label: "Mittlere Antwortzeit (10 min)",
-      value: limiter.avgMs === null ? "–" : `${number(limiter.avgMs / 1000)} s`,
-    },
-  ];
-  return (
-    <div className="mt-3">
-      <h4 className="text-[12px] font-semibold text-ink-soft">Anfragen an den Dienst, alle Instanzen</h4>
-      {limiter.pausedUntil && (
-        <p className="notice notice-warn mt-2" role="status">
-          Nach einer Störung pausiert bis {formatDateTimeWithSeconds(limiter.pausedUntil)}
-          {limiter.lastPauseReason ? `: ${limiter.lastPauseReason}` : "."}
-        </p>
-      )}
-      <div className="mt-2 grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
-        {stats.map((stat) => (
-          <div key={stat.label} className="bg-surface p-3">
-            <p className="text-xl font-semibold tabular-nums text-ink">{stat.value}</p>
-            <p className="mt-0.5 text-[12px] leading-snug text-ink-faint">{stat.label}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function WorkerBadge({ alive, label }: { alive: boolean; label?: string }) {
-  return (
-    <span className={`badge ${alive ? "bg-ok-soft text-ok" : "bg-bad-soft text-bad"}`}>
-      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
-      {label ?? (alive ? "Aktiv" : "Keine Rückmeldung")}
-    </span>
-  );
-}
-
-function JobTable({ title, rows, empty }: { title: string; rows: JobRow[]; empty: string }) {
-  return (
-    <div className="mt-5">
-      <h3 className="text-[12px] font-semibold uppercase tracking-wide text-ink-soft">{title}</h3>
-      {rows.length === 0 ? (
-        <p className="mt-2 text-[13px] text-ink-soft">{empty}</p>
-      ) : (
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse">
-            <thead className="bg-canvas">
-              <tr>
-                <th className="th">Datei</th>
-                <th className="th">Status</th>
-                <th className="th">Erstellt</th>
-                <th className="th">Gestartet</th>
-                <th className="th">Beendet</th>
-                <th className="th">Versuche</th>
-                <th className="th">Meldung</th>
-                <th className="th">Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td className="td">
-                    <Link href={`/aufnahmen/${row.id}`} className="font-mono text-[11.5px] text-petrol hover:underline">
-                      {row.filename}
-                    </Link>
-                  </td>
-                  <td className="td">
-                    <StatusBadge status={row.status} />
-                  </td>
-                  <td className="td whitespace-nowrap text-[12px]">
-                    {formatDateTimeWithSeconds(row.created)}
-                  </td>
-                  <td className="td whitespace-nowrap text-[12px]">
-                    {formatDateTimeWithSeconds(row.started)}
-                  </td>
-                  <td className="td whitespace-nowrap text-[12px]">
-                    {formatDateTimeWithSeconds(row.finished)}
-                  </td>
-                  <td className="td tabular-nums">{row.attempts}</td>
-                  <td className="td max-w-[280px] text-[11.5px] text-bad">{row.error ?? "–"}</td>
-                  <td className="td">{row.action}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
 }

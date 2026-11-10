@@ -14,7 +14,15 @@ import { DELIVERY_LABELS, EMAIL_PATTERN, type MailSettingsInput } from "@/lib/ma
 import { saveMailSettings } from "@/lib/mailer";
 import { saveTemplate } from "@/lib/settings";
 import { getRecording, hardDeleteRecording } from "@/lib/recordings";
-import { requeueTranscription } from "@/lib/transcription";
+import {
+  liftSpendingBlock,
+  moveJobToFront,
+  requeueAllFailed,
+  retryJobNow,
+  saveQueueSettings,
+  setQueuePaused,
+  type SettingsInput,
+} from "@/lib/transcription";
 import type { Comment, User } from "@/lib/types";
 
 export type TemplatePreview = {
@@ -82,23 +90,69 @@ export async function resetToDefaultTemplateAction(): Promise<{
   };
 }
 
-export async function retryTranscriptionAction(
-  recordingId: string,
-): Promise<{ ok: boolean; message: string }> {
+/* --------------------------------------------------------------- Transkriptionsdienst */
+
+type ActionResult = { ok: boolean; message: string };
+
+function revalidateQueue(recordingId?: string) {
+  revalidatePath("/admin");
+  revalidatePath("/admin/transkription");
+  revalidatePath("/aufnahmen");
+  if (recordingId) revalidatePath(`/aufnahmen/${recordingId}`);
+}
+
+export async function setQueuePausedAction(paused: boolean): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  await setQueuePaused(paused, admin.email);
+  revalidateQueue();
+  return { ok: true, message: paused ? "Warteschlange pausiert." : "Warteschlange läuft wieder." };
+}
+
+export async function liftSpendingBlockAction(): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  const lifted = await liftSpendingBlock(admin.email);
+  revalidateQueue();
+  return lifted
+    ? { ok: true, message: "Sperre aufgehoben. Die Warteschlange läuft wieder." }
+    : { ok: true, message: "Es besteht keine Sperre mehr." };
+}
+
+export async function saveQueueSettingsAction(input: SettingsInput): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  const result = await saveQueueSettings(input, admin.email);
+  if (result.ok) revalidateQueue();
+  return result;
+}
+
+export async function retryJobAction(recordingId: string): Promise<ActionResult> {
   await requireAdmin();
   const recording = await getRecording(recordingId);
   if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
-
-  const result = await requeueTranscription(recordingId, { allowCompleted: true });
-  revalidatePath("/admin");
-  revalidatePath("/aufnahmen");
-  revalidatePath(`/aufnahmen/${recordingId}`);
+  const result = await retryJobNow(recordingId);
+  revalidateQueue(recordingId);
   return {
     ok: result.ok,
     message:
-      result.state === "gestartet"
+      result.state === "gestartet" && result.message.includes("eingereiht")
         ? `Transkription für ${recording.originalFilename} neu gestartet.`
         : result.message,
+  };
+}
+
+export async function moveJobToFrontAction(recordingId: string): Promise<ActionResult> {
+  await requireAdmin();
+  const result = await moveJobToFront(recordingId);
+  revalidateQueue(recordingId);
+  return result;
+}
+
+export async function requeueAllFailedAction(): Promise<ActionResult> {
+  await requireAdmin();
+  const count = await requeueAllFailed();
+  revalidateQueue();
+  return {
+    ok: true,
+    message: count === 0 ? "Keine fehlgeschlagenen Aufträge." : `${count} ${count === 1 ? "Auftrag" : "Aufträge"} neu eingereiht.`,
   };
 }
 

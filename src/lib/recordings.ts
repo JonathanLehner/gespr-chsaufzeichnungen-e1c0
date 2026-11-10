@@ -15,7 +15,6 @@ import {
 } from "./db";
 import type {
   Comment,
-  Job,
   Rating,
   Recording,
   TranscriptIndexDoc,
@@ -460,11 +459,6 @@ export async function refreshRatingSummary(recordingId: string): Promise<void> {
 }
 
 /* ---------------------------------------------------------------- Aufträge */
-
-export async function listJobs(): Promise<Job[]> {
-  const rows = await findMany<Job>(Collections.jobs, {});
-  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
 
 export async function countByStatus(): Promise<Record<TranscriptionStatus, number>> {
   const [wartend, inArbeit, abgeschlossen, ohneSprache, fehlgeschlagen] = await Promise.all([

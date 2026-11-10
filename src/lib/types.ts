@@ -147,7 +147,18 @@ export type Job = {
   /** Nächster Versuch eines wartenden Auftrags nach einer Störung; `null` = sofort fällig. */
   nextAttemptAt: string | null;
   originalFilename: string;
+  /** „Nach vorne“ im Admin-Dashboard; höhere Werte werden zuerst bearbeitet. */
+  priority?: number | null;
 };
+
+/**
+ * Angehaltene Warteschlange, für die Anzeige bei wartenden Aufnahmen:
+ * Sperre nach dem Kostenlimit des Dienstes oder Pause durch den Admin.
+ */
+export type QueueHalt =
+  | { kind: "gesperrt"; since: string; until: string }
+  | { kind: "pausiert"; since: string }
+  | null;
 
 export type FilenameTemplateSettings = {
   _id: "filename_template";
