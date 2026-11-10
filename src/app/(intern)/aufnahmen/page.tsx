@@ -204,9 +204,16 @@ export default async function AufnahmenPage({
                       <Link href={`/aufnahmen/${row._id}`} className="text-petrol hover:underline">
                         {formatDateTime(row.callAtUtc)}
                       </Link>
-                      <span className="mt-0.5 block break-all font-mono text-[12px] text-ink-faint">
-                        {row.originalFilename}
-                      </span>
+                      {/* Gekürzt, damit die Tabelle nicht nach rechts überläuft; ein Klick
+                          klappt den vollen Dateinamen auf. */}
+                      <details className="group mt-0.5 font-mono text-[12px] text-ink-faint">
+                        <summary
+                          className="block cursor-pointer list-none truncate hover:text-ink-soft group-open:whitespace-normal group-open:break-all min-[700px]:max-w-[16rem] [&::-webkit-details-marker]:hidden"
+                          title={row.originalFilename}
+                        >
+                          {row.originalFilename}
+                        </summary>
+                      </details>
                     </td>
                     <td className="td" data-cell="anrufer">
                       <span className="font-medium text-ink">{row.callerName}</span>
