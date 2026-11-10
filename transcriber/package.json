@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx run.ts"
+    "start": "tsx worker.ts"
   },
   "dependencies": {
     "hyphenation.de": "^0.2.1",

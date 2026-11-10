@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY run.ts ./
+COPY worker.ts ./
 COPY shared ./shared
 USER node
-CMD ["node", "--import", "tsx", "run.ts"]
+CMD ["node", "--import", "tsx", "worker.ts"]

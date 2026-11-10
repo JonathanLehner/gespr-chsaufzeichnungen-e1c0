@@ -3,7 +3,6 @@
     {
       "name": "transcriber",
       "context": "transcriber",
-      "schedule": "*/10 * * * *",
       "cpus": 0.5,
       "memory": "512m",
       "env": ["MONGODB_URI", "CLAWCORP_API_KEY"]

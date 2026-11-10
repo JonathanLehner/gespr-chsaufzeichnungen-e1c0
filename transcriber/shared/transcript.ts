@@ -262,3 +262,36 @@ export function splitIntoParts(recordingId: string, segments: TranscriptSegment[
     segments: partSegments,
   }));
 }
+
+export type TranscriptIndex = {
+  _id: string;
+  recordingId: string;
+  fullText: string;
+  sentences: { t: number; e: number; s: string; x: string }[];
+  speakerLabels: string[];
+  updatedAt: string;
+};
+
+/** Kompakter Volltext-Index einer Aufnahme für Suche und Anzeige. */
+export function buildTranscriptIndex(
+  recordingId: string,
+  segments: TranscriptSegment[],
+  speakerLabels: string[],
+): TranscriptIndex {
+  const sentences = segments.flatMap((segment) =>
+    segment.sentences.map((sentence) => ({
+      t: sentence.startMs,
+      e: sentence.endMs,
+      s: segment.speakerLabel,
+      x: sentence.text,
+    })),
+  );
+  return {
+    _id: recordingId,
+    recordingId,
+    fullText: sentences.map((sentence) => sentence.x).join(" "),
+    sentences,
+    speakerLabels,
+    updatedAt: new Date().toISOString(),
+  };
+}

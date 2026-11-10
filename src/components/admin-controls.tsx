@@ -7,7 +7,6 @@ import {
   deleteForeignCommentAction,
   hardDeleteRecordingAction,
   retryTranscriptionAction,
-  runQueueAction,
   type ResetLinkResult,
 } from "@/app/actions/admin";
 import { formatDateTimeWithSeconds } from "@/lib/time";
@@ -34,32 +33,6 @@ export function RetryButton({ recordingId }: { recordingId: string }) {
         {pending ? "Wird gestartet …" : "Erneut starten"}
       </button>
       {message && <p className="mt-1 text-[12px] text-ink-faint">{message}</p>}
-    </div>
-  );
-}
-
-export function RunQueueButton() {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  const [message, setMessage] = useState<string | null>(null);
-
-  return (
-    <div className="flex items-center gap-3">
-      <button
-        type="button"
-        className="btn btn-secondary"
-        disabled={pending}
-        onClick={() =>
-          startTransition(async () => {
-            const result = await runQueueAction();
-            setMessage(result.message);
-            router.refresh();
-          })
-        }
-      >
-        {pending ? "Warteschlange läuft …" : "Warteschlange jetzt abarbeiten"}
-      </button>
-      {message && <span className="text-[12px] text-ink-soft">{message}</span>}
     </div>
   );
 }

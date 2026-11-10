@@ -127,6 +127,9 @@ node scripts/check-umbruch.mjs     # kein Absatz endet mit einem einzelnen Wort 
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-audio-split.mts
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-namensabgleich.mts
 
+# Exklusive Übernahme von Aufträgen (nur gegen eine Wegwerf-Datenbank, leert deren `jobs`)
+TEST_MONGODB_URI="mongodb://localhost:27017/claim_race" npx tsx scripts/check-transcriber-claim.mts
+
 # Ausrichtung der Zeiten an der Aufnahme
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-ausrichtung.mts
 npx tsx --env-file=.env.local --conditions=react-server scripts/check-mp3-verlauf.mts
@@ -216,23 +219,49 @@ Schlüssel nicht im Admin-Dashboard hinterlegt wird.
 
 ### Transkriptionsdienst
 
-Die Anwendung legt beim Upload nur den Auftrag an (`jobs`, Status `wartend`). Abgearbeitet wird die
-Warteschlange vom Dienst in `transcriber/`, den ClawCorp laut `clawcorp.json` alle zehn Minuten als
-Container startet (nur in Produktion; Staging und Produktion teilen sich die Datenbank, der Dienst
-bearbeitet also beide). Er braucht `MONGODB_URI` und `CLAWCORP_API_KEY` und ffmpeg (im Image).
+Die Anwendung legt beim Upload nur den Auftrag an (`jobs`, Status `wartend`); weder Upload noch
+Seitenaufrufe stossen eine Verarbeitung an. Abgearbeitet wird die Warteschlange vom ständig
+laufenden Dienst in `transcriber/` (`clawcorp.json`, Dienst `transcriber`, eigenes Dockerfile mit
+ffmpeg). ClawCorp startet ihn bei jedem Produktions-Deploy und startet ihn neu, wenn er endet; auf
+Staging läuft er nur während eines Test-Jobs. Staging und Produktion teilen sich die Datenbank, der
+Dienst bearbeitet also beide.
 
-Ein Lauf übernimmt fällige Aufträge (wartend, verwaist, pausiert oder fällige Wiederholung) nach
-Alter, bis die Warteschlange leer ist oder acht Minuten vorbei sind. Jeder fertige Abschnitt wird
-sofort am Auftrag gespeichert (`progress`), ein offener Auftrag läuft im nächsten Lauf an derselben
-Stelle weiter. Die Abschnitte gehen als Opus (16 kbit/s, rund 160 KB) direkt in die Anfrage.
+| Variable | Pflicht | Zweck |
+| --- | --- | --- |
+| `MONGODB_URI` | ja | Datenbank mit `jobs`, `recordings`, Transkripten |
+| `CLAWCORP_API_KEY` | ja | Gemini über die Plattform |
+| `TRANSCRIBER_CONCURRENCY` | nein | gleichzeitig bearbeitete Aufträge, Standard 2, höchstens 8 |
+
+- **Übernahme**: atomar per `findOneAndUpdate` (wartend, fällige Wiederholung oder verwaiste
+  Sperre → `in_arbeit` mit `lockedAt`, `lockId`, `workerId`). Jeder spätere Schreibvorgang des
+  Dienstes prüft `lockId`; ein Auftrag läuft deshalb nie doppelt, auch nicht über zwei Instanzen.
+- **Lebenszeichen**: alle 30 s erneuert ein laufender Auftrag `lockedAt`. Bleibt es drei Minuten
+  aus (abgebrochener Container), übernimmt ein anderer Platz den Auftrag an der gespeicherten Stelle
+  (`progress`, je Abschnitt). Wird ein Auftrag mehr als zweimal verwaist vorgefunden, gilt er als
+  fehlgeschlagen.
+- **Wiederholung**: höchstens drei Versuche, nach 3 und 15 Minuten. „Erneut starten“ im
+  Admin-Dashboard setzt den Auftrag nur auf `wartend` zurück.
+- **Reihenfolge**: Jeder Platz wechselt bei jeder Übernahme zwischen dem neuesten und dem ältesten
+  fälligen Auftrag. Ein neuer Upload wartet damit höchstens auf den nächsten freien Platz statt
+  hinter dem gesamten Rückstand eines Massen-Uploads, und der Rückstand (inklusive Wiederholungen
+  und verwaister Aufträge, die alt sind) läuft trotzdem gleichmässig weiter ab.
+- **Leerlauf**: Ohne Arbeit wartet der Dienst auf eine Änderung an `jobs` (Change Stream) oder
+  bis zur nächsten bekannten Fälligkeit, höchstens fünf Minuten (ohne Change Stream 30 s).
+- **Beenden**: Bei SIGTERM werden laufende Anfragen abgebrochen, der Zwischenstand gespeichert und
+  der Auftrag als `wartend` freigegeben.
+- **Zustand**: Jede Instanz schreibt ihr Lebenszeichen nach `transcriber_workers`. Das
+  Admin-Dashboard zeigt Instanzen, letztes Lebenszeichen, Warteschlange und Erledigtes der letzten
+  Stunde.
+- **Audio**: geholt über die gespeicherte Adresse (`/api/dateien/<schlüssel>` der Anwendung, liefert
+  aus dem R2-Bucket der jeweiligen Umgebung), daher keine R2-Zugangsdaten im Dienst.
 
 ```bash
 docker build -t transcriber transcriber
-docker run --rm -e MONGODB_URI=... -e CLAWCORP_API_KEY=... transcriber   # ein Lauf
+docker run --rm -e MONGODB_URI=... -e CLAWCORP_API_KEY=... transcriber
 ```
 
-Die reine Logik in `transcriber/shared/` (Prompt, Auswertung, Zerlegung, Ausrichtung) nutzen Dienst
-und Anwendung gemeinsam.
+Die reine Logik in `transcriber/shared/` (Prompt, Auswertung, Zerlegung, Ausrichtung,
+Warteschlangenregeln) nutzen Dienst und Anwendung gemeinsam.
 
 ## Technische Entscheidungen
 
@@ -274,7 +303,7 @@ und Anwendung gemeinsam.
   nicht rot dargestellt und ist in der Übersicht filterbar.
 - **Aufträge**: Jede Aufnahme hat genau einen Transkriptionsauftrag. Er wird vor der Ausführung
   gesperrt, sodass parallele Aufrufe, wiederholte Klicks oder ein erneuter Upload keine doppelten
-  Läufe erzeugen. Hängengebliebene Aufträge werden nach zehn Minuten wieder aufgenommen.
+  Läufe erzeugen. Aufträge ohne Lebenszeichen werden nach drei Minuten wieder aufgenommen.
 - **Warteschlange ausserhalb des Workers**: Früher wurde die Warteschlange nach dem Upload und bei
   Seitenaufrufen per `after()` angestossen. Im Worker endet diese Arbeit rund 30 Sekunden nach der
   Antwort; ein Gespräch von einigen Minuten braucht länger. Die Läufe brachen ab, der Auftrag blieb

@@ -14,7 +14,7 @@ import { DELIVERY_LABELS, EMAIL_PATTERN, type MailSettingsInput } from "@/lib/ma
 import { saveMailSettings } from "@/lib/mailer";
 import { saveTemplate } from "@/lib/settings";
 import { getRecording, hardDeleteRecording } from "@/lib/recordings";
-import { requeueTranscription, runPendingJobs } from "@/lib/transcription";
+import { requeueTranscription } from "@/lib/transcription";
 import type { Comment, User } from "@/lib/types";
 
 export type TemplatePreview = {
@@ -99,20 +99,6 @@ export async function retryTranscriptionAction(
       result.state === "gestartet"
         ? `Transkription für ${recording.originalFilename} neu gestartet.`
         : result.message,
-  };
-}
-
-export async function runQueueAction(): Promise<{ ok: boolean; message: string }> {
-  await requireAdmin();
-  const done = await runPendingJobs(2);
-  revalidatePath("/admin");
-  revalidatePath("/aufnahmen");
-  return {
-    ok: true,
-    message:
-      done > 0
-        ? `${done} ${done === 1 ? "Auftrag wurde" : "Aufträge wurden"} abgearbeitet.`
-        : "Es waren keine offenen Aufträge vorhanden oder sie werden bereits bearbeitet.",
   };
 }
 

@@ -16,8 +16,8 @@ import {
   HardDeleteButton,
   ResetLinkButton,
   RetryButton,
-  RunQueueButton,
 } from "@/components/admin-controls";
+import { queueHealth, type QueueHealth } from "@/lib/transcription";
 import type {
   MailDeliveryStatus,
   MailOutboxEntry,
@@ -48,7 +48,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [settings, jobs, statusCounts, flagged, users, outbox, totalRecordings, mailSetup] =
+  const [settings, jobs, statusCounts, flagged, users, outbox, totalRecordings, mailSetup, health] =
     await Promise.all([
       getTemplateSettings(),
       listJobs(),
@@ -58,6 +58,7 @@ export default async function AdminPage() {
       findMany<MailOutboxEntry>(Collections.mailOutbox, {}),
       countDocuments(Collections.recordings, {}),
       mailOverview(),
+      queueHealth(),
     ]);
 
   const [commentCount, ratingCount, commentOverview] = await Promise.all([
@@ -133,10 +134,9 @@ export default async function AdminPage() {
       />
 
       <section className="card p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h2 className="text-[15px] font-semibold text-ink">Upload- und Transkriptionsaufträge</h2>
-          <RunQueueButton />
-        </div>
+        <h2 className="text-[15px] font-semibold text-ink">Upload- und Transkriptionsaufträge</h2>
+
+        <WorkerHealthPanel health={health} />
 
         <JobTable
           title={`Laufend und wartend (${running.length})`}
@@ -440,6 +440,99 @@ type JobRow = {
   error: string | null;
   action: React.ReactNode;
 };
+
+function WorkerHealthPanel({ health }: { health: QueueHealth }) {
+  const active = health.workers.filter((worker) => worker.alive);
+  const stats = [
+    { label: "Warteschlange", value: health.queued },
+    { label: "In Arbeit", value: health.running },
+    { label: "Wiederholung geplant", value: health.retryScheduled },
+    { label: "Erledigt (letzte Stunde)", value: health.doneLastHour },
+    { label: "Fehlgeschlagen (letzte Stunde)", value: health.failedLastHour },
+  ];
+
+  return (
+    <div className="mt-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h3 className="text-[12px] font-semibold uppercase tracking-wide text-ink-soft">
+          Transkriptionsdienst
+        </h3>
+        <WorkerBadge
+          alive={active.length > 0}
+          label={active.length > 1 ? `${active.length} Instanzen aktiv` : undefined}
+        />
+        <span className="text-[12px] text-ink-faint">
+          {health.lastHeartbeatAt
+            ? `Letztes Lebenszeichen: ${formatDateTimeWithSeconds(health.lastHeartbeatAt)}`
+            : "Noch kein Lebenszeichen"}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
+        {stats.map((stat) => (
+          <div key={stat.label} className="bg-surface p-3">
+            <p className="text-xl font-semibold tabular-nums text-ink">
+              {stat.value.toLocaleString("de-CH")}
+            </p>
+            <p className="mt-0.5 text-[12px] leading-snug text-ink-faint">{stat.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {health.workers.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[720px] border-collapse">
+            <thead className="bg-canvas">
+              <tr>
+                <th className="th">Instanz</th>
+                <th className="th">Status</th>
+                <th className="th">Gestartet</th>
+                <th className="th">Letztes Lebenszeichen</th>
+                <th className="th">Plätze</th>
+                <th className="th">Laufend</th>
+                <th className="th">Erledigt</th>
+                <th className="th">Fehlgeschlagen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {health.workers.map((worker) => (
+                <tr key={worker.id}>
+                  <td className="td font-mono text-[11.5px]">{worker.id}</td>
+                  <td className="td">
+                    {worker.stoppedAt && !worker.alive ? (
+                      <span className="badge bg-canvas text-ink-soft">Beendet</span>
+                    ) : (
+                      <WorkerBadge alive={worker.alive} />
+                    )}
+                  </td>
+                  <td className="td whitespace-nowrap text-[12px]">
+                    {formatDateTimeWithSeconds(worker.startedAt)}
+                  </td>
+                  <td className="td whitespace-nowrap text-[12px]">
+                    {formatDateTimeWithSeconds(worker.lastHeartbeatAt)}
+                  </td>
+                  <td className="td tabular-nums">{worker.concurrency}</td>
+                  <td className="td tabular-nums">{worker.activeJobs.length}</td>
+                  <td className="td tabular-nums">{worker.processed}</td>
+                  <td className="td tabular-nums">{worker.failed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkerBadge({ alive, label }: { alive: boolean; label?: string }) {
+  return (
+    <span className={`badge ${alive ? "bg-ok-soft text-ok" : "bg-bad-soft text-bad"}`}>
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
+      {label ?? (alive ? "Aktiv" : "Keine Rückmeldung")}
+    </span>
+  );
+}
 
 function JobTable({ title, rows, empty }: { title: string; rows: JobRow[]; empty: string }) {
   return (
