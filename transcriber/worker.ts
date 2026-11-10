@@ -847,6 +847,8 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     await db.jobs.updateOne(own, {
       $set: {
         ...progressFields(state),
+        // Bleibt nach dem Lauf stehen: Die Auftragsliste zeigt und filtert danach.
+        usedModel: model.id,
         progressRunAt: iso(),
         progressRunDone: state.chunks.filter(Boolean).length + state.failed.length,
       },

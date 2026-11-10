@@ -1,5 +1,6 @@
 import "server-only";
 import {
+  aggregate,
   Collections,
   countDocuments,
   deleteMany,
@@ -33,6 +34,8 @@ import {
 import { buildTranscriptIndex, splitIntoParts } from "../../transcriber/shared/transcript";
 import { readFileBytes } from "./storage";
 import { invalidateRecordingCache } from "./recordings";
+import { cetDayStartUtcIso } from "./time";
+import type { JobFilterValues, JobSortKey } from "./job-filter";
 import type { Job, QueueHalt, Recording, TranscriptPartDoc, TranscriptSegment, TranscriptionStatus } from "./types";
 
 /**
@@ -134,6 +137,7 @@ export async function resetJob(recordingId: string, options: { background?: bool
         paused: null,
         permanent: null,
         staleClaims: 0,
+        usedModel: null,
         ...(options.background ? {} : { background: null, kind: null, model: null }),
       },
     },
@@ -564,8 +568,6 @@ export type QueueOverview = {
   waiting: QueueJobRow[];
   /** Geplante Wiederholungen, früheste zuerst. */
   nextAttempts: QueueJobRow[];
-  failed: QueueJobRow[];
-  recentlyFinished: QueueJobRow[];
   errors: (QueueErrorEntry & { filename: string | null })[];
   manualPause: { at: string; by: string } | null;
   spendingBlock: SpendingBlock | null;
@@ -608,19 +610,13 @@ function toJobRows(docs: JobRowDoc[]): QueueJobRow[] {
 export async function queueOverview(health: QueueHealth): Promise<QueueOverview> {
   const statuses: TranscriptionStatus[] = ["wartend", "in_arbeit", "abgeschlossen", "ohne_sprache", "fehlgeschlagen"];
   const now = iso();
-  const [countList, waiting, nextAttempts, failed, recentlyFinished, oldest, doc, finishedLastHour] = await Promise.all([
+  const [countList, waiting, nextAttempts, oldest, doc, finishedLastHour] = await Promise.all([
     Promise.all(statuses.map((status) => countDocuments(Collections.jobs, { status }))),
     findMany<JobRowDoc>(Collections.jobs, { status: { $in: ["in_arbeit", "wartend"] } }, {
       projection: JOB_FIELDS, sort: { status: 1, background: 1, priority: -1, createdAt: 1 }, limit: 25,
     }),
     findMany<JobRowDoc>(Collections.jobs, { status: "wartend", nextAttemptAt: { $gt: now } }, {
       projection: JOB_FIELDS, sort: { nextAttemptAt: 1 }, limit: 10,
-    }),
-    findMany<JobRowDoc>(Collections.jobs, { status: "fehlgeschlagen" }, {
-      projection: JOB_FIELDS, sort: { finishedAt: -1 }, limit: 50,
-    }),
-    findMany<JobRowDoc>(Collections.jobs, { status: { $in: ["abgeschlossen", "ohne_sprache"] } }, {
-      projection: JOB_FIELDS, sort: { finishedAt: -1 }, limit: 10,
     }),
     findMany<JobRowDoc>(Collections.jobs, { status: "wartend" }, {
       projection: JOB_FIELDS, sort: { createdAt: 1 }, limit: 1,
@@ -651,8 +647,6 @@ export async function queueOverview(health: QueueHealth): Promise<QueueOverview>
     oldestWaiting: toJobRows(oldest)[0] ?? null,
     waiting: toJobRows(waiting),
     nextAttempts: toJobRows(nextAttempts),
-    failed: toJobRows(failed),
-    recentlyFinished: toJobRows(recentlyFinished),
     errors: rawErrors.map((entry) => ({ ...entry, filename: entry.recordingId ? names.get(entry.recordingId) ?? null : null })),
     manualPause: doc?.manualPause ?? null,
     spendingBlock: activeBlock(doc),
@@ -667,5 +661,210 @@ export async function queueOverview(health: QueueHealth): Promise<QueueOverview>
       recordings: finishedLastHour.length,
       audioMs: finishedLastHour.reduce((sum, row) => sum + (row.durationMs ?? 0), 0),
     },
+  };
+}
+
+/* ------------------------------------------------------------ Auftragstabelle (alle Aufträge) */
+
+export type JobListRow = QueueJobRow & {
+  uploaderName: string | null;
+  /** Verwendetes Modell; vor dem ersten Lauf das für den Auftrag gewählte. */
+  modelUsed: string | null;
+};
+
+export type JobList = {
+  rows: JobListRow[];
+  total: number;
+  totalAll: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  uploaders: { email: string; name: string }[];
+  models: string[];
+};
+
+const STATUS_RANK = ["in_arbeit", "wartend", "fehlgeschlagen", "abgeschlossen", "ohne_sprache"];
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Bereich auf einem ISO-Textfeld aus zwei Kalendertagen (CET). */
+function dayRange(von: string, bis: string): Record<string, string> | null {
+  const range: Record<string, string> = {};
+  const from = von ? cetDayStartUtcIso(von) : null;
+  const to = bis ? cetDayStartUtcIso(bis, true) : null;
+  if (from) range.$gte = from;
+  if (to) range.$lte = to;
+  return Object.keys(range).length > 0 ? range : null;
+}
+
+const JOB_SORT_FIELDS: Record<JobSortKey, string> = {
+  datei: "_fileKey",
+  status: "_statusRank",
+  erstellt: "createdAt",
+  gestartet: "startedAt",
+  beendet: "finishedAt",
+  versuche: "_attempts",
+  meldung: "lastError",
+};
+
+/**
+ * Alle Aufträge, direkt aus der Auftragssammlung gelesen (kein
+ * Zwischenspeicher): gefiltert, sortiert und geblättert in der Datenbank.
+ * Ohne gewählte Sortierung: laufend, dann wartend in Bearbeitungsreihenfolge
+ * (sofort fällige nach Vorrang und Alter, danach geplante nach Zeitpunkt),
+ * dann die neusten.
+ */
+export async function listJobs(values: JobFilterValues): Promise<JobList> {
+  const now = iso();
+  const match: Record<string, unknown>[] = [];
+  if (values.status.length > 0) match.push({ status: { $in: values.status } });
+  if (values.datei) match.push({ originalFilename: { $regex: escapeRegex(values.datei), $options: "i" } });
+  if (values.uploader) match.push({ _uploaderEmail: values.uploader });
+  for (const [field, von, bis] of [
+    ["createdAt", values.erstelltVon, values.erstelltBis],
+    ["startedAt", values.gestartetVon, values.gestartetBis],
+    ["finishedAt", values.beendetVon, values.beendetBis],
+  ] as const) {
+    const range = dayRange(von, bis);
+    if (range) match.push({ [field]: range });
+  }
+  if (values.versucheMin) match.push({ _attempts: { $gte: Number(values.versucheMin) } });
+  if (values.meldung) match.push({ lastError: { $nin: [null, ""] } });
+  if (values.modell) match.push({ _model: values.modell });
+  const filter = match.length > 0 ? { $and: match } : {};
+
+  let order: Record<string, unknown>[];
+  if (values.sort) {
+    const field = JOB_SORT_FIELDS[values.sort.key];
+    const dir = values.sort.dir === "asc" ? 1 : -1;
+    order = [
+      // Fehlende Werte stehen in beiden Richtungen am Ende.
+      { $addFields: { _missing: { $cond: [{ $in: [{ $ifNull: [`$${field}`, null] }, [null, ""]] }, 1, 0] } } },
+      { $sort: { _missing: 1, [field]: dir, createdAt: -1, _id: 1 } },
+    ];
+  } else {
+    const waiting = { $eq: ["$status", "wartend"] };
+    const scheduled = { $and: [waiting, { $gt: [{ $ifNull: ["$nextAttemptAt", ""] }, now] }] };
+    const open = { $in: ["$status", ["wartend", "in_arbeit"]] };
+    order = [
+      {
+        $addFields: {
+          _group: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$status", "in_arbeit"] }, then: 0 },
+                { case: waiting, then: 1 },
+              ],
+              default: 2,
+            },
+          },
+          _scheduled: { $cond: [scheduled, 1, 0] },
+          _nextAt: { $cond: [scheduled, "$nextAttemptAt", null] },
+          _background: { $cond: [{ $and: [open, { $eq: ["$background", true] }] }, 1, 0] },
+          _priority: { $cond: [open, { $ifNull: ["$priority", 0] }, 0] },
+          _openSince: { $cond: [open, { $ifNull: ["$startedAt", "$createdAt"] }, null] },
+          _recent: { $cond: [open, null, { $ifNull: ["$finishedAt", "$createdAt"] }] },
+        },
+      },
+      {
+        $sort: {
+          _group: 1, _scheduled: 1, _nextAt: 1, _background: 1, _priority: -1, _openSince: 1,
+          _recent: -1, createdAt: -1, _id: 1,
+        },
+      },
+    ];
+  }
+
+  const pageSize = Number(values.pageSize);
+  type Facet = {
+    rows: (JobRowDoc & { _uploaderName?: string | null; _model?: string | null })[];
+    total: { n: number }[];
+    totalAll: { n: number }[];
+    uploaders: { _id: string | null; name: string | null }[];
+    models: { _id: string | null }[];
+  };
+  const pipeline = (skip: number) => [
+    {
+      $lookup: {
+        from: Collections.recordings,
+        localField: "_id",
+        foreignField: "_id",
+        as: "_rec",
+        pipeline: [{ $project: { uploadedByEmail: 1, uploadedByName: 1, "transcript.model": 1 } }],
+      },
+    },
+    {
+      $addFields: {
+        _uploaderEmail: { $first: "$_rec.uploadedByEmail" },
+        _uploaderName: { $first: "$_rec.uploadedByName" },
+        // Das verwendete Modell: vom Dienst vermerkt, sonst aus dem laufenden
+        // Zwischenstand oder dem fertigen Transkript, vor dem ersten Lauf das gewählte.
+        _model: {
+          $ifNull: [
+            "$usedModel",
+            "$progress.model",
+            {
+              $cond: [
+                { $in: ["$status", ["abgeschlossen", "ohne_sprache"]] },
+                { $first: "$_rec.transcript.model" },
+                null,
+              ],
+            },
+            "$model",
+          ],
+        },
+        _statusRank: { $indexOfArray: [STATUS_RANK, "$status"] },
+        _fileKey: { $toLower: { $ifNull: ["$originalFilename", ""] } },
+        _attempts: { $ifNull: ["$attempts", 0] },
+      },
+    },
+    {
+      $facet: {
+        rows: [
+          { $match: filter },
+          ...order,
+          { $skip: skip },
+          { $limit: pageSize },
+          { $project: { ...JOB_FIELDS, _uploaderName: 1, _model: 1 } },
+        ],
+        total: [{ $match: filter }, { $count: "n" }],
+        totalAll: [{ $count: "n" }],
+        uploaders: [
+          { $match: { _uploaderEmail: { $ne: null } } },
+          { $group: { _id: "$_uploaderEmail", name: { $first: "$_uploaderName" } } },
+          { $sort: { name: 1 } },
+        ],
+        models: [{ $match: { _model: { $ne: null } } }, { $group: { _id: "$_model" } }, { $sort: { _id: 1 } }],
+      },
+    },
+  ];
+
+  let page = values.page;
+  let [facet] = await aggregate<Facet>(Collections.jobs, pipeline((page - 1) * pageSize));
+  const total = facet.total[0]?.n ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  // Eine Seite hinter dem Ende (etwa nach einem engeren Filter) zeigt die letzte.
+  if (page > pageCount) {
+    page = pageCount;
+    [facet] = await aggregate<Facet>(Collections.jobs, pipeline((page - 1) * pageSize));
+  }
+
+  return {
+    rows: facet.rows.map((doc) => ({
+      ...toJobRows([doc])[0],
+      uploaderName: doc._uploaderName ?? null,
+      modelUsed: doc._model ?? null,
+    })),
+    total,
+    totalAll: facet.totalAll[0]?.n ?? 0,
+    page,
+    pageSize,
+    pageCount,
+    uploaders: facet.uploaders
+      .filter((entry): entry is { _id: string; name: string | null } => !!entry._id)
+      .map((entry) => ({ email: entry._id, name: entry.name || entry._id })),
+    models: facet.models.map((entry) => entry._id).filter((id): id is string => !!id),
   };
 }

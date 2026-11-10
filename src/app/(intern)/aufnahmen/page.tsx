@@ -8,6 +8,7 @@ import { DEFAULT_SORT, parseSort } from "@/lib/recording-sort";
 import { cetDayStartUtcIso, renderTimestamp } from "@/lib/time";
 import { RecordingsFilter, type FilterValues } from "@/components/recordings-filter";
 import { RecordingsTable, type TableRow } from "@/components/recordings-table";
+import { Pagination } from "@/components/pagination";
 import { DEFAULT_TEMPLATE_EXAMPLE } from "@/lib/filename-template";
 import { TranscriptionWatcher, type WatchedRecording } from "@/components/transcription-watcher";
 import type { QueueHalt, TranscriptionStatus } from "@/lib/types";
@@ -178,43 +179,13 @@ export default async function AufnahmenPage({
         renderedAt={renderedAt}
       />
 
-      {result.pageCount > 1 && (
-        <nav className="flex items-center justify-between gap-3" aria-label="Seitennavigation">
-          <span className="text-[12px] text-ink-soft">
-            Einträge {(result.page - 1) * result.pageSize + 1} bis{" "}
-            {Math.min(result.page * result.pageSize, result.total)} von{" "}
-            {result.total.toLocaleString("de-CH")}
-          </span>
-          <div className="flex items-center gap-1">
-            <PageLink values={values} page={result.page - 1} disabled={result.page <= 1}>
-              Zurück
-            </PageLink>
-            {pageWindow(result.page, result.pageCount).map((entry, index) =>
-              entry === null ? (
-                <span key={`l-${index}`} className="px-1 text-[12px] text-ink-faint">
-                  …
-                </span>
-              ) : (
-                <Link
-                  key={entry}
-                  href={buildQuery(values, entry)}
-                  aria-current={entry === result.page ? "page" : undefined}
-                  className={`btn ${entry === result.page ? "btn-primary" : "btn-secondary"} min-w-9`}
-                >
-                  {entry}
-                </Link>
-              ),
-            )}
-            <PageLink
-              values={values}
-              page={result.page + 1}
-              disabled={result.page >= result.pageCount}
-            >
-              Weiter
-            </PageLink>
-          </div>
-        </nav>
-      )}
+      <Pagination
+        page={result.page}
+        pageCount={result.pageCount}
+        pageSize={result.pageSize}
+        total={result.total}
+        href={(page) => buildQuery(values, page)}
+      />
 
       <p className="text-[12px] text-ink-faint">
         Angemeldet als {user.email}.
@@ -260,42 +231,4 @@ function toTableRow(
     hits: row.hits,
     matchedFields: row.matchedFields,
   };
-}
-
-function PageLink({
-  values,
-  page,
-  disabled,
-  children,
-}: {
-  values: FilterValues;
-  page: number;
-  disabled: boolean;
-  children: React.ReactNode;
-}) {
-  if (disabled) {
-    return (
-      <span className="btn btn-secondary opacity-50" aria-disabled>
-        {children}
-      </span>
-    );
-  }
-  return (
-    <Link href={buildQuery(values, page)} className="btn btn-secondary">
-      {children}
-    </Link>
-  );
-}
-
-function pageWindow(current: number, total: number): (number | null)[] {
-  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
-  const sorted = [...pages].filter((page) => page >= 1 && page <= total).sort((a, b) => a - b);
-  const output: (number | null)[] = [];
-  let previous = 0;
-  for (const page of sorted) {
-    if (previous && page - previous > 1) output.push(null);
-    output.push(page);
-    previous = page;
-  }
-  return output;
 }

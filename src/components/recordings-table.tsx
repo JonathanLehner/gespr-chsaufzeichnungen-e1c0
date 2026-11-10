@@ -1,16 +1,7 @@
 "use client";
 
-import { Fragment, useMemo, useTransition, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import {
-  rowSortingFeature,
-  tableFeatures,
-  useTable,
-  type ColumnDef,
-  type SortingState,
-  type Updater,
-} from "@tanstack/react-table";
 import { describeTranscriptionError } from "@/lib/transcription-errors";
 import { formatDateTime, formatDuration } from "@/lib/time";
 import { DEFAULT_SORT, DESC_FIRST, isSortKey, type SortDir, type SortKey } from "@/lib/recording-sort";
@@ -26,6 +17,13 @@ import {
   TranscriptionStatusLine,
   type TranscriptionTiming,
 } from "@/components/transcription-status-line";
+import {
+  DataTable,
+  labelled,
+  sortableColumn,
+  type CellProps,
+  type DataColumn,
+} from "@/components/data-table";
 
 export type TableRow = { transcriptionTiming: TranscriptionTiming } & Pick<
   RecordingRow,
@@ -51,10 +49,8 @@ export type TableRow = { transcriptionTiming: TranscriptionTiming } & Pick<
 
 type ColumnId = SortKey | "aktion";
 
-const features = tableFeatures({ rowSortingFeature });
-
 /** Zellattribute je Spalte; `data-cell` steuert die Kartenansicht unter 700 px. */
-const CELL_PROPS: Record<ColumnId, { className: string; dataCell: string }> = {
+const CELL_PROPS: Record<ColumnId, CellProps> = {
   zeitpunkt: { className: "td font-medium min-[700px]:whitespace-nowrap", dataCell: "zeitpunkt" },
   anrufer: { className: "td", dataCell: "anrufer" },
   telefon: { className: "td font-mono text-[12px] min-[700px]:whitespace-nowrap", dataCell: "wert" },
@@ -80,32 +76,11 @@ const ACCESSORS: Record<SortKey, (row: TableRow) => string | number | boolean | 
   loeschmarkierung: (row) => row.deletionFlagged,
 };
 
-function sortable(
-  id: SortKey,
-  header: string,
-  cell: (row: TableRow) => ReactNode,
-): ColumnDef<typeof features, TableRow> {
-  return {
-    id,
-    header,
-    accessorFn: ACCESSORS[id],
-    cell: ({ row }) => cell(row.original),
-    enableSorting: true,
-    sortDescFirst: DESC_FIRST.has(id),
-  };
+function sortable(id: SortKey, header: string, cell: (row: TableRow) => ReactNode): DataColumn<TableRow> {
+  return sortableColumn(id, header, ACCESSORS[id], cell, DESC_FIRST.has(id));
 }
 
-/** Beschriftete Zeile in der Kartenansicht; ab 700 px trägt der Tabellenkopf die Beschriftung. */
-function labelled(label: string, content: ReactNode) {
-  return (
-    <>
-      <CardLabel>{label}</CardLabel>
-      <span className="block">{content}</span>
-    </>
-  );
-}
-
-function buildColumns(renderedAt: number): ColumnDef<typeof features, TableRow>[] {
+function buildColumns(renderedAt: number): DataColumn<TableRow>[] {
   return [
   sortable("zeitpunkt", "Gesprächs\u00adzeitpunkt (CET)", (row) => (
     <>
@@ -191,8 +166,7 @@ function buildColumns(renderedAt: number): ColumnDef<typeof features, TableRow>[
 
 /**
  * Aufnahmeliste. Sortiert wird auf dem Server über den ganzen gefilterten
- * Bestand (`manualSorting`); die Tabelle schreibt nur `sort` und `dir` in die
- * URL und springt dabei auf Seite 1 zurück.
+ * Bestand; die Tabelle schreibt nur `sort` und `dir` in die URL.
  */
 export function RecordingsTable({
   rows,
@@ -209,167 +183,60 @@ export function RecordingsTable({
   renderedAt: number;
 }) {
   const columns = useMemo(() => buildColumns(renderedAt), [renderedAt]);
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [pending, startTransition] = useTransition();
-  const sorting: SortingState = [{ id: sortKey, desc: sortDir === "desc" }];
-
-  function onSortingChange(updater: Updater<SortingState>) {
-    const next = (typeof updater === "function" ? updater(sorting) : updater)[0];
-    if (!next || !isSortKey(next.id)) return;
-    const dir: SortDir = next.desc ? "desc" : "asc";
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("page");
-    if (next.id === DEFAULT_SORT.key && dir === DEFAULT_SORT.dir) {
-      params.delete("sort");
-      params.delete("dir");
-    } else {
-      params.set("sort", next.id);
-      params.set("dir", dir);
-    }
-    const search = params.toString();
-    startTransition(() => router.push(search ? `${pathname}?${search}` : pathname));
-  }
-
-  const table = useTable({
-    features,
-    columns,
-    data: rows,
-    getRowId: (row) => row._id,
-    state: { sorting },
-    onSortingChange,
-    manualSorting: true,
-    enableMultiSort: false,
-    enableSortingRemoval: false,
-  });
 
   return (
-    <div className="card overflow-hidden max-[699px]:border-0 max-[699px]:bg-transparent">
-      <div className="overflow-x-auto">
-        <table
-          className={`stack-cards w-full min-w-0 border-collapse transition-opacity min-[700px]:min-w-[1180px] min-[700px]:[&_.td]:px-2 min-[700px]:[&_th:not(:has(button))]:px-2 ${pending ? "opacity-60" : ""}`}
-          aria-busy={pending || undefined}
-        >
-          <thead className="bg-canvas">
-            {table.getHeaderGroups().map((group) => (
-              <tr key={group.id}>
-                {group.headers.map((header) => {
-                  const column = header.column;
-                  if (!column.getCanSort()) {
-                    return (
-                      <th key={header.id} className="th">
-                        <table.FlexRender header={header} />
-                      </th>
-                    );
-                  }
-                  const sorted = column.getIsSorted();
-                  return (
-                    <th
-                      key={header.id}
-                      className="th p-0"
-                      aria-sort={
-                        sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"
-                      }
-                    >
-                      <button
-                        type="button"
-                        onClick={column.getToggleSortingHandler()}
-                        className={`inline-flex w-full items-center gap-0.5 whitespace-normal px-3 py-2 text-left uppercase tracking-[inherit] hover:text-ink min-[700px]:px-2 ${sorted ? "text-ink" : ""}`}
-                      >
-                        <table.FlexRender header={header} />
-                        <SortArrow direction={sorted} />
-                      </button>
-                    </th>
-                  );
-                })}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td className="td text-center text-ink-soft" colSpan={columns.length} data-cell="leer">
-                  Keine Aufnahme entspricht den gewählten Filtern.{" "}
-                  <Link href="/aufnahmen" className="font-semibold text-petrol hover:underline">
-                    Filter zurücksetzen
+    <DataTable
+      columns={columns}
+      data={rows}
+      getRowId={(row) => row._id}
+      cellProps={CELL_PROPS}
+      sort={{ key: sortKey, dir: sortDir }}
+      defaultSort={DEFAULT_SORT}
+      isSortKey={isSortKey}
+      tableClassName="min-[700px]:min-w-[1180px] min-[700px]:[&_.td]:px-2 min-[700px]:[&_th:not(:has(button))]:px-2"
+      empty={
+        <>
+          Keine Aufnahme entspricht den gewählten Filtern.{" "}
+          <Link href="/aufnahmen" className="font-semibold text-petrol hover:underline">
+            Filter zurücksetzen
+          </Link>
+        </>
+      }
+      // Badge und Schaltfläche teilen sich den Zustand, damit die Zeile
+      // sofort nach dem Klick umschaltet und nicht erst nach dem Neuladen.
+      wrapCells={(data, cells) => (
+        <DeletionFlagProvider recordingId={data._id} flagged={data.deletionFlagged}>
+          {cells}
+        </DeletionFlagProvider>
+      )}
+      afterRow={(data, colSpan) =>
+        (data.hits.length > 0 || data.matchedFields.length > 0) && (
+          <tr className="bg-petrol-soft/40" data-row="treffer">
+            <td className="td" colSpan={colSpan} data-cell="treffer">
+              {data.matchedFields.length > 0 && (
+                <p className="text-[12px] text-ink-soft">
+                  Treffer in: <strong>{data.matchedFields.join(", ")}</strong>
+                </p>
+              )}
+              {data.hits.map((hit, index) => (
+                <p key={index} className="mt-1 text-[12.5px] leading-relaxed text-ink">
+                  <Link
+                    href={`/aufnahmen/${data._id}?t=${hit.startMs}&q=${encodeURIComponent(query)}`}
+                    className="mr-2 font-mono text-[11px] font-semibold text-petrol hover:underline"
+                  >
+                    {formatDuration(hit.startMs)}
                   </Link>
-                </td>
-              </tr>
-            )}
-            {table.getRowModel().rows.map((row) => {
-              const data = row.original;
-              return (
-                <Fragment key={row.id}>
-                  <tr className="min-[700px]:hover:bg-canvas/60">
-                    {/* Badge und Schaltfläche teilen sich den Zustand, damit die Zeile
-                        sofort nach dem Klick umschaltet und nicht erst nach dem Neuladen. */}
-                    <DeletionFlagProvider recordingId={data._id} flagged={data.deletionFlagged}>
-                      {row.getAllCells().map((cell) => {
-                        const props = CELL_PROPS[cell.column.id as ColumnId];
-                        return (
-                          <td key={cell.id} className={props.className} data-cell={props.dataCell}>
-                            <table.FlexRender cell={cell} />
-                          </td>
-                        );
-                      })}
-                    </DeletionFlagProvider>
-                  </tr>
-                  {(data.hits.length > 0 || data.matchedFields.length > 0) && (
-                    <tr className="bg-petrol-soft/40" data-row="treffer">
-                      <td className="td" colSpan={columns.length} data-cell="treffer">
-                        {data.matchedFields.length > 0 && (
-                          <p className="text-[12px] text-ink-soft">
-                            Treffer in: <strong>{data.matchedFields.join(", ")}</strong>
-                          </p>
-                        )}
-                        {data.hits.map((hit, index) => (
-                          <p key={index} className="mt-1 text-[12.5px] leading-relaxed text-ink">
-                            <Link
-                              href={`/aufnahmen/${data._id}?t=${hit.startMs}&q=${encodeURIComponent(query)}`}
-                              className="mr-2 font-mono text-[11px] font-semibold text-petrol hover:underline"
-                            >
-                              {formatDuration(hit.startMs)}
-                            </Link>
-                            <span className="text-ink-faint">{hit.speaker}: </span>
-                            {hit.before}
-                            <mark>{hit.match}</mark>
-                            {hit.after}
-                            {hit.after.length >= 80 ? " …" : ""}
-                          </p>
-                        ))}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function SortArrow({ direction }: { direction: false | SortDir }) {
-  return (
-    <svg
-      aria-hidden
-      viewBox="0 0 10 12"
-      className={`h-3 w-2 flex-none ${direction ? "text-petrol" : "text-ink-faint opacity-60"}`}
-      fill="currentColor"
-    >
-      {direction !== "desc" && <path d={direction ? "M5 1 9 7H1z" : "M5 0 8.5 4.5h-7z"} />}
-      {direction !== "asc" && <path d={direction ? "M5 11 1 5h8z" : "M5 12 1.5 7.5h7z"} />}
-    </svg>
-  );
-}
-
-/** Spaltenbezeichnung innerhalb der Karte; unterhalb von 700 px ersetzt sie den Tabellenkopf. */
-function CardLabel({ children }: { children: ReactNode }) {
-  return (
-    <span className="flex-none text-[11px] font-bold uppercase tracking-[0.06em] text-ink-soft min-[700px]:hidden">
-      {children}
-    </span>
+                  <span className="text-ink-faint">{hit.speaker}: </span>
+                  {hit.before}
+                  <mark>{hit.match}</mark>
+                  {hit.after}
+                  {hit.after.length >= 80 ? " …" : ""}
+                </p>
+              ))}
+            </td>
+          </tr>
+        )
+      }
+    />
   );
 }

@@ -3,18 +3,18 @@ import type { Metadata } from "next";
 import { getCurrentUser } from "@/lib/auth";
 import { formatDateTimeWithSeconds, formatDuration, renderTimestamp } from "@/lib/time";
 import { haltText } from "@/lib/queue-halt";
-import { queueHealth, queueOverview, type QueueHealth, type QueueJobRow } from "@/lib/transcription";
-import { StatusBadge } from "@/components/status";
+import { listJobs, queueHealth, queueOverview, type QueueHealth } from "@/lib/transcription";
 import { TranscriptionWatcher } from "@/components/transcription-watcher";
 import {
-  currentChunk,
-  formatChunkRate,
-  formatRemaining,
-  formatSecondsAgo,
-  hasChunkProgress,
-  remainingMs,
-} from "@/lib/progress-text";
-import { STALE_LOCK_MS } from "../../../../../transcriber/shared/queue";
+  JOB_PARAM_KEYS,
+  activeJobFilterCount,
+  jobQueryParams,
+  parseJobFilters,
+  type JobFilterValues,
+} from "@/lib/job-filter";
+import { JobsFilter } from "@/components/jobs-filter";
+import { JobsTable } from "@/components/jobs-table";
+import { Pagination } from "@/components/pagination";
 import { AdminTabs } from "@/components/admin-tabs";
 import {
   JobActionButton,
@@ -53,6 +53,33 @@ export const metadata: Metadata = { title: "Transkription verwalten" };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
+const PAGE_PATH = "/admin/transkription";
+/** Parameter der Transkriptliste weiter unten; die Auftragstabelle lässt sie stehen. */
+const TRANSCRIPT_PARAM_KEYS = ["modell", "zeiten", "sortierung", "richtung", "seite"] as const;
+
+function pick(
+  query: Record<string, string | string[] | undefined>,
+  keys: readonly string[],
+): [string, string][] {
+  return keys.flatMap((key) => {
+    const value = param(query, key);
+    return value ? [[key, value] as [string, string]] : [];
+  });
+}
+
+function pageHref(entries: [string, string][], hash: string): string {
+  const search = new URLSearchParams(entries).toString();
+  return `${PAGE_PATH}${search ? `?${search}` : ""}#${hash}`;
+}
+
+/** Schnellansichten der Auftragstabelle; sie setzen nur den Statusfilter. */
+const JOB_VIEWS: { label: string; status: JobFilterValues["status"] }[] = [
+  { label: "Alle", status: [] },
+  { label: "Laufend und wartend", status: ["in_arbeit", "wartend"] },
+  { label: "Fehlgeschlagen", status: ["fehlgeschlagen"] },
+  { label: "Abgeschlossen", status: ["abgeschlossen", "ohne_sprache"] },
+];
+
 function param(query: Record<string, string | string[] | undefined>, key: string): string {
   const value = query[key];
   return String((Array.isArray(value) ? value[0] : value) ?? "");
@@ -82,10 +109,14 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
   const sort: TranscriptSort = param(query, "sortierung") in TRANSCRIPT_SORTS ? (param(query, "sortierung") as TranscriptSort) : "datum";
   const direction = param(query, "richtung") === "auf" ? 1 : -1;
   const page = Math.max(1, Number.parseInt(param(query, "seite"), 10) || 1);
+  const jobFilters = parseJobFilters(query);
+  const transcriptParams = pick(query, TRANSCRIPT_PARAM_KEYS);
+  const jobParams = pick(query, JOB_PARAM_KEYS);
 
   const health = await queueHealth();
-  const [overview, modelSettings, actual, costs, transcripts] = await Promise.all([
+  const [overview, jobs, modelSettings, actual, costs, transcripts] = await Promise.all([
     queueOverview(health),
+    listJobs(jobFilters),
     getModelSettings(),
     actualCostPerMinute(),
     costByMonth(),
@@ -266,45 +297,71 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
             ))}
           </ul>
         )}
+      </section>
 
-        <JobTable
-          title={`Laufend und wartend (${overview.counts.in_arbeit + overview.counts.wartend})`}
-          note={
-            overview.counts.in_arbeit + overview.counts.wartend > overview.waiting.length
-              ? `Die ersten ${overview.waiting.length} in Bearbeitungsreihenfolge.`
-              : undefined
-          }
-          empty="Keine offenen Aufträge."
-          rows={overview.waiting}
-          now={now}
-          action={(job) =>
-            job.status === "wartend" ? (
-              <JobActionButton recordingId={job._id} action="vorne" label="Nach vorne" />
-            ) : (
-              <span className="text-[12px] text-ink-faint">–</span>
-            )
-          }
-        />
-
-        <div className="mt-5 flex flex-wrap items-end justify-between gap-3">
-          <h3 className="text-[12px] font-semibold uppercase tracking-wide text-ink-soft">
-            Fehlgeschlagen ({overview.counts.fehlgeschlagen})
-          </h3>
+      {/* Aufträge */}
+      <section id="auftraege" className="scroll-mt-20 space-y-3" aria-labelledby="auftraege-titel">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="auftraege-titel" className="text-[15px] font-semibold text-ink">
+              Aufträge
+            </h2>
+            <p className="mt-1 text-[13px] text-ink-soft">
+              {jobs.total.toLocaleString("de-CH")} {jobs.total === 1 ? "Auftrag" : "Aufträge"}
+              {activeJobFilterCount(jobFilters) > 0
+                ? ` gefiltert aus ${jobs.totalAll.toLocaleString("de-CH")}`
+                : ""}{" "}
+              · Seite {jobs.page} von {jobs.pageCount}
+            </p>
+          </div>
           <RequeueAllFailedButton count={overview.counts.fehlgeschlagen} />
         </div>
-        <JobTable
-          empty="Keine fehlgeschlagenen Aufträge."
-          rows={overview.failed}
-          now={now}
-          action={(job) => <JobActionButton recordingId={job._id} action="wiederholen" label="Erneut starten" />}
+        <nav aria-label="Ansichten" className="flex flex-wrap gap-1.5 text-[12px]">
+          {JOB_VIEWS.map((view) => {
+            const active =
+              activeJobFilterCount(jobFilters) === (view.status.length > 0 ? 1 : 0) &&
+              view.status.join(",") === jobFilters.status.join(",");
+            return (
+              <Link
+                key={view.label}
+                href={pageHref(
+                  [
+                    ...transcriptParams,
+                    ...jobQueryParams({ ...jobFilters, status: view.status }, 1),
+                  ],
+                  "auftraege",
+                )}
+                aria-current={active ? "true" : undefined}
+                className={`badge ${active ? "bg-petrol text-white" : "bg-surface border border-line text-ink-soft hover:text-petrol"}`}
+              >
+                {view.label}
+              </Link>
+            );
+          })}
+        </nav>
+        <JobsFilter
+          action={`${PAGE_PATH}#auftraege`}
+          values={jobFilters}
+          uploaders={jobs.uploaders}
+          models={jobs.models}
+          activeCount={activeJobFilterCount(jobFilters)}
+          keep={transcriptParams}
+          resetHref={pageHref(transcriptParams, "auftraege")}
         />
-
-        <JobTable
-          title="Zuletzt abgeschlossen"
-          empty="Noch keine abgeschlossenen Aufträge."
-          rows={overview.recentlyFinished}
-          now={now}
-          action={(job) => <JobActionButton recordingId={job._id} action="wiederholen" label="Erneut starten" />}
+        <JobsTable
+          rows={jobs.rows}
+          sort={jobFilters.sort}
+          renderedAt={now}
+          resetHref={pageHref(transcriptParams, "auftraege")}
+        />
+        <Pagination
+          page={jobs.page}
+          pageCount={jobs.pageCount}
+          pageSize={jobs.pageSize}
+          total={jobs.total}
+          href={(target) =>
+            pageHref([...transcriptParams, ...jobQueryParams(jobFilters, target)], "auftraege")
+          }
         />
       </section>
 
@@ -389,6 +446,7 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
       {/* Transkripte */}
       <TranscriptTable
         rows={transcripts.rows}
+        keep={jobParams}
         total={transcripts.total}
         page={page}
         filterModel={filterModel}
@@ -575,121 +633,10 @@ function WorkerBadge({ alive, label }: { alive: boolean; label?: string }) {
   );
 }
 
-function JobTable({
-  title,
-  note,
-  rows,
-  empty,
-  now,
-  action,
-}: {
-  title?: string;
-  note?: string;
-  rows: QueueJobRow[];
-  empty: string;
-  now: number;
-  action: (job: QueueJobRow) => React.ReactNode;
-}) {
-  return (
-    <div className={title ? "mt-5" : "mt-2"}>
-      {title && <h3 className="text-[12px] font-semibold uppercase tracking-wide text-ink-soft">{title}</h3>}
-      {rows.length === 0 ? (
-        <p className="mt-2 text-[13px] text-ink-soft">{empty}</p>
-      ) : (
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse">
-            <thead className="bg-canvas">
-              <tr>
-                <th className="th">Datei</th>
-                <th className="th">Status</th>
-                <th className="th">Eingereiht</th>
-                <th className="th">Letzter Versuch</th>
-                <th className="th">Versuche</th>
-                <th className="th">Meldung</th>
-                <th className="th">Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((job) => (
-                <tr key={job._id}>
-                  <td className="td">
-                    <Link href={`/aufnahmen/${job._id}`} className="font-mono text-[11.5px] text-petrol hover:underline wrap-anywhere">
-                      {job.originalFilename}
-                    </Link>
-                    {job.priority && job.status === "wartend" ? (
-                      <span className="ml-1.5 badge bg-petrol-soft text-petrol">vorgezogen</span>
-                    ) : null}
-                    {job.background ? (
-                      <span className="ml-1.5 badge bg-canvas text-ink-soft">
-                        {job.kind === "neu_ausrichten" ? "Neu ausrichten" : "Neu transkribieren"}
-                      </span>
-                    ) : null}
-                    {job.model ? (
-                      <span className="mt-0.5 block font-mono text-[11px] text-ink-faint">{job.model}</span>
-                    ) : null}
-                  </td>
-                  <td className="td">
-                    <StatusBadge status={job.status} />
-                    {job.status === "wartend" && job.nextAttemptAt && Date.parse(job.nextAttemptAt) > now && (
-                      <span className="mt-0.5 block text-[12px] text-ink-soft tabular-nums">
-                        ab {formatDateTimeWithSeconds(job.nextAttemptAt)}
-                      </span>
-                    )}
-                    {job.status === "in_arbeit" && <RunningProgress job={job} now={now} />}
-                  </td>
-                  <td className="td whitespace-nowrap text-[12px] tabular-nums">{formatDateTimeWithSeconds(job.createdAt)}</td>
-                  <td className="td whitespace-nowrap text-[12px] tabular-nums">{formatDateTimeWithSeconds(job.finishedAt)}</td>
-                  <td className="td tabular-nums">{job.attempts ?? 0}</td>
-                  <td className="td max-w-[280px] text-[11.5px] text-bad wrap-anywhere">{job.lastError ?? "–"}</td>
-                  <td className="td">{action(job)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {note && <p className="mt-1.5 text-[12px] text-ink-faint">{note}</p>}
-    </div>
-  );
-}
-
-/** Fortschritt eines laufenden Auftrags: Abschnitt, gemessene Geschwindigkeit, Lebenszeichen. */
-function RunningProgress({ job, now }: { job: QueueJobRow; now: number }) {
-  const progress = job.progress;
-  const heartbeat = progress.heartbeatAt;
-  if (!heartbeat || now - Date.parse(heartbeat) > STALE_LOCK_MS) {
-    return (
-      <span className="mt-0.5 block text-[12px] text-warn tabular-nums">
-        Keine Rückmeldung{heartbeat ? ` seit ${formatDateTimeWithSeconds(heartbeat)}` : ""}, wird neu
-        vergeben
-      </span>
-    );
-  }
-  const chunked = hasChunkProgress(progress);
-  const total = progress.progressTotal ?? 0;
-  const percent = chunked ? Math.round((Math.min(progress.progressDone ?? 0, total) / total) * 100) : null;
-  const rate = chunked ? formatChunkRate(progress) : null;
-  const remaining = chunked ? remainingMs(progress) : null;
-  return (
-    <span className="mt-1 block min-w-[180px] text-[12px] text-ink-soft tabular-nums">
-      {chunked ? `Abschnitt ${currentChunk(progress)}/${total}` : "Fortschritt unbestimmt"}
-      {rate ? ` · ${rate}` : ""}
-      {percent !== null && (
-        <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-busy-soft" aria-hidden>
-          <span className="block h-full rounded-full bg-busy" style={{ width: `${percent}%` }} />
-        </span>
-      )}
-      <span className="mt-0.5 block text-ink-faint">
-        {progress.startedAt ? `Gestartet ${formatDateTimeWithSeconds(progress.startedAt)} · ` : ""}
-        Lebenszeichen {formatSecondsAgo(heartbeat, now)}
-        {remaining !== null ? ` · ${formatRemaining(remaining)}` : ""}
-      </span>
-    </span>
-  );
-}
-
 type TranscriptTableProps = {
   rows: Awaited<ReturnType<typeof listTranscripts>>["rows"];
+  /** Parameter der Auftragstabelle, die beim Blättern erhalten bleiben. */
+  keep: [string, string][];
   total: number;
   page: number;
   filterModel: string | null;
@@ -699,7 +646,7 @@ type TranscriptTableProps = {
 };
 
 /** Abgeschlossene Transkripte mit Herkunft; Filter und Sortierung über die Adresse. */
-function TranscriptTable({ rows, total, page, filterModel, filterTiming, sort, direction }: TranscriptTableProps) {
+function TranscriptTable({ rows, keep, total, page, filterModel, filterTiming, sort, direction }: TranscriptTableProps) {
   const href = (patch: Record<string, string | null>) => {
     const values: Record<string, string | null> = {
       modell: filterModel,
@@ -709,9 +656,10 @@ function TranscriptTable({ rows, total, page, filterModel, filterTiming, sort, d
       seite: page > 1 ? String(page) : null,
       ...patch,
     };
-    const search = new URLSearchParams(
-      Object.entries(values).filter((entry): entry is [string, string] => !!entry[1]),
-    ).toString();
+    const search = new URLSearchParams([
+      ...keep,
+      ...Object.entries(values).filter((entry): entry is [string, string] => !!entry[1]),
+    ]).toString();
     return `/admin/transkription${search ? `?${search}` : ""}#transkripte`;
   };
   const sortLink = (key: TranscriptSort, label: string) => {
