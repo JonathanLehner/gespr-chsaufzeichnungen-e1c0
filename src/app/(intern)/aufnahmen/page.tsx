@@ -2,18 +2,12 @@ import { Fragment } from "react";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
-import { listRecordings, type SortKey } from "@/lib/recordings";
-import { describeTranscriptionError } from "@/lib/transcription-errors";
-import { cetDayStartUtcIso, formatDateTime, formatDuration } from "@/lib/time";
-import { RatingValue, StatusBadge } from "@/components/status";
+import { listRecordings } from "@/lib/recordings";
+import { DEFAULT_SORT, parseSort } from "@/lib/recording-sort";
+import { cetDayStartUtcIso } from "@/lib/time";
 import { RecordingsFilter, type FilterValues } from "@/components/recordings-filter";
-import {
-  DeletionFlagBadge,
-  DeletionFlagButton,
-  DeletionFlagProvider,
-} from "@/components/deletion-flag";
+import { RecordingsTable, type TableRow } from "@/components/recordings-table";
 import { DEFAULT_TEMPLATE_EXAMPLE } from "@/lib/filename-template";
-import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
 import { TranscriptionWatcher, type WatchedRecording } from "@/components/transcription-watcher";
 import type { TranscriptionStatus } from "@/lib/types";
 
@@ -38,7 +32,10 @@ function buildQuery(values: FilterValues, page: number): string {
   if (values.loeschstatus && values.loeschstatus !== "alle") {
     params.set("loeschstatus", values.loeschstatus);
   }
-  if (values.sort !== "gespraech_neu") params.set("sort", values.sort);
+  if (values.sort !== DEFAULT_SORT.key || values.dir !== DEFAULT_SORT.dir) {
+    params.set("sort", values.sort);
+    params.set("dir", values.dir);
+  }
   if (values.pageSize !== "20") params.set("pageSize", values.pageSize);
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
@@ -53,6 +50,7 @@ export default async function AufnahmenPage({
   const user = await requireUser();
   const params = await searchParams;
 
+  const sort = parseSort(first(params, "sort"), first(params, "dir"));
   const values: FilterValues = {
     q: first(params, "q"),
     von: first(params, "von"),
@@ -62,7 +60,8 @@ export default async function AufnahmenPage({
     bewertungVon: first(params, "bewertungVon"),
     bewertungBis: first(params, "bewertungBis"),
     loeschstatus: first(params, "loeschstatus") || "alle",
-    sort: (first(params, "sort") || "gespraech_neu") as SortKey,
+    sort: sort.key,
+    dir: sort.dir,
     pageSize: first(params, "pageSize") || "20",
   };
   const page = Math.max(1, Number(first(params, "page")) || 1);
@@ -77,6 +76,7 @@ export default async function AufnahmenPage({
     bewertungBis: values.bewertungBis ? Number(values.bewertungBis) : undefined,
     loeschstatus: values.loeschstatus as "alle" | "nur_markiert" | "ohne_markiert",
     sort: values.sort,
+    dir: values.dir,
     page,
     pageSize: Number(values.pageSize) || 20,
   });
@@ -161,171 +161,12 @@ export default async function AufnahmenPage({
 
       <TranscriptionWatcher entries={watched} />
 
-      <div className="card overflow-hidden max-[699px]:border-0 max-[699px]:bg-transparent">
-        <div className="overflow-x-auto">
-          <table className="stack-cards w-full min-w-0 border-collapse min-[700px]:min-w-[1180px]">
-            <thead className="bg-canvas">
-              <tr>
-                <th className="th">Gesprächszeitpunkt (CET)</th>
-                <th className="th">Anrufer</th>
-                <th className="th">Telefonnummer</th>
-                <th className="th">Anrufnr.</th>
-                <th className="th">Dauer</th>
-                <th className="th">Hochgeladen von</th>
-                <th className="th">Bewertung</th>
-                <th className="th">Transkription</th>
-                <th className="th">Löschmarkierung</th>
-                <th className="th">Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.rows.length === 0 && (
-                <tr>
-                  <td className="td text-center text-ink-soft" colSpan={10} data-cell="leer">
-                    Keine Aufnahme entspricht den gewählten Filtern.{" "}
-                    <Link href="/aufnahmen" className="font-semibold text-petrol hover:underline">
-                      Filter zurücksetzen
-                    </Link>
-                  </td>
-                </tr>
-              )}
-              {result.rows.map((row) => (
-                <Fragment key={row._id}>
-                  <tr className="min-[700px]:hover:bg-canvas/60">
-                    <td
-                      className="td font-medium min-[700px]:whitespace-nowrap"
-                      data-cell="zeitpunkt"
-                    >
-                      <Link href={`/aufnahmen/${row._id}`} className="text-petrol hover:underline">
-                        {formatDateTime(row.callAtUtc)}
-                      </Link>
-                      {/* Gekürzt, damit die Tabelle nicht nach rechts überläuft; ein Klick
-                          klappt den vollen Dateinamen auf. */}
-                      <details className="group mt-0.5 font-mono text-[12px] text-ink-faint">
-                        <summary
-                          className="block cursor-pointer list-none truncate hover:text-ink-soft group-open:whitespace-normal group-open:break-all min-[700px]:max-w-[16rem] [&::-webkit-details-marker]:hidden"
-                          title={row.originalFilename}
-                        >
-                          {row.originalFilename}
-                        </summary>
-                      </details>
-                    </td>
-                    <td className="td" data-cell="anrufer">
-                      <span className="font-medium text-ink">{row.callerName}</span>
-                      {row.metadataSource === "manuell" && (
-                        <span className="ml-1.5 badge bg-petrol-soft text-petrol">manuell erfasst</span>
-                      )}
-                    </td>
-                    <td
-                      className="td font-mono text-[12px] min-[700px]:whitespace-nowrap"
-                      data-cell="wert"
-                    >
-                      <CardLabel>Telefonnummer</CardLabel>
-                      <span className="block">{row.phoneNumber || "–"}</span>
-                    </td>
-                    <td
-                      className="td font-mono text-[12px] min-[700px]:whitespace-nowrap"
-                      data-cell="wert"
-                    >
-                      <CardLabel>Anrufnr.</CardLabel>
-                      <span className="block">{row.callNumber || "–"}</span>
-                    </td>
-                    <td
-                      className="td font-mono text-[12px] min-[700px]:whitespace-nowrap"
-                      data-cell="wert"
-                    >
-                      <CardLabel>Dauer</CardLabel>
-                      <span className="block">{formatDuration(row.durationMs)}</span>
-                    </td>
-                    <td className="td min-[700px]:whitespace-nowrap" data-cell="wert">
-                      <CardLabel>Hochgeladen von</CardLabel>
-                      <span className="block">{row.uploadedByName}</span>
-                    </td>
-                    <td className="td" data-cell="wert">
-                      <CardLabel>Bewertung</CardLabel>
-                      <span className="block">
-                        <RatingValue average={row.ratingAverage} count={row.ratingCount} />
-                      </span>
-                    </td>
-                    <td className="td" data-cell="wert">
-                      <CardLabel>Transkription</CardLabel>
-                      <span className="block">
-                        <StatusBadge status={row.transcriptionStatus} />
-                        {row.transcriptionStatus === "fehlgeschlagen" && (
-                          <span className="mt-0.5 block text-[12px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
-                            {describeTranscriptionError(row.transcriptionError).message}
-                          </span>
-                        )}
-                        {row.transcriptionStatus === "ohne_sprache" && (
-                          <span className="mt-0.5 block text-[12px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
-                            Ausgewertet, aber nichts Gesprochenes zu hören.
-                          </span>
-                        )}
-                      </span>
-                    </td>
-                    {/* Badge und Schaltfläche teilen sich den Zustand, damit die Zeile
-                        sofort nach dem Klick umschaltet und nicht erst nach dem Neuladen. */}
-                    <DeletionFlagProvider recordingId={row._id} flagged={row.deletionFlagged}>
-                      <td className="td" data-cell="wert">
-                        <CardLabel>Löschmarkierung</CardLabel>
-                        <span className="block">
-                          <DeletionFlagBadge
-                            flagged={row.deletionFlagged}
-                            flaggedBy={row.deletionFlaggedBy}
-                          />
-                        </span>
-                      </td>
-                      <td className="td" data-cell="aktion">
-                        <div className="flex flex-wrap items-start gap-2 min-[700px]:flex-col min-[700px]:gap-1">
-                          <Link href={`/aufnahmen/${row._id}`} className="btn btn-ghost">
-                            Öffnen
-                          </Link>
-                          {row.transcriptionStatus === "fehlgeschlagen" && (
-                            <RetryTranscriptionButton
-                              key={row.transcriptionFinishedAt ?? "neu"}
-                              recordingId={row._id}
-                            />
-                          )}
-                          <DeletionFlagButton
-                            recordingId={row._id}
-                            flagged={row.deletionFlagged}
-                          />
-                        </div>
-                      </td>
-                    </DeletionFlagProvider>
-                  </tr>
-                  {(row.hits.length > 0 || row.matchedFields.length > 0) && (
-                    <tr className="bg-petrol-soft/40" data-row="treffer">
-                      <td className="td" colSpan={10} data-cell="treffer">
-                        {row.matchedFields.length > 0 && (
-                          <p className="text-[12px] text-ink-soft">
-                            Treffer in: <strong>{row.matchedFields.join(", ")}</strong>
-                          </p>
-                        )}
-                        {row.hits.map((hit, index) => (
-                          <p key={index} className="mt-1 text-[12.5px] leading-relaxed text-ink">
-                            <Link
-                              href={`/aufnahmen/${row._id}?t=${hit.startMs}&q=${encodeURIComponent(values.q)}`}
-                              className="mr-2 font-mono text-[11px] font-semibold text-petrol hover:underline"
-                            >
-                              {formatDuration(hit.startMs)}
-                            </Link>
-                            <span className="text-ink-faint">{hit.speaker}: </span>
-                            {hit.before}
-                            <mark>{hit.match}</mark>
-                            {hit.after}
-                            {hit.after.length >= 80 ? " …" : ""}
-                          </p>
-                        ))}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <RecordingsTable
+        rows={result.rows.map(toTableRow)}
+        sortKey={values.sort}
+        sortDir={values.dir}
+        query={values.q}
+      />
 
       {result.pageCount > 1 && (
         <nav className="flex items-center justify-between gap-3" aria-label="Seitennavigation">
@@ -372,16 +213,28 @@ export default async function AufnahmenPage({
   );
 }
 
-/**
- * Spaltenbezeichnung innerhalb der Karte. Unterhalb von 700 px ersetzt sie den
- * ausgeblendeten Tabellenkopf; ab 700 px trägt der Tabellenkopf die Beschriftung.
- */
-function CardLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="flex-none text-[11px] font-bold uppercase tracking-[0.06em] text-ink-soft min-[700px]:hidden">
-      {children}
-    </span>
-  );
+/** Nur die Felder, die die Tabelle anzeigt, gehen an den Client. */
+function toTableRow(row: Awaited<ReturnType<typeof listRecordings>>["rows"][number]): TableRow {
+  return {
+    _id: row._id,
+    callAtUtc: row.callAtUtc,
+    originalFilename: row.originalFilename,
+    callerName: row.callerName,
+    metadataSource: row.metadataSource,
+    phoneNumber: row.phoneNumber,
+    callNumber: row.callNumber,
+    durationMs: row.durationMs,
+    uploadedByName: row.uploadedByName,
+    ratingAverage: row.ratingAverage,
+    ratingCount: row.ratingCount,
+    transcriptionStatus: row.transcriptionStatus,
+    transcriptionError: row.transcriptionError,
+    transcriptionFinishedAt: row.transcriptionFinishedAt,
+    deletionFlagged: row.deletionFlagged,
+    deletionFlaggedBy: row.deletionFlaggedBy,
+    hits: row.hits,
+    matchedFields: row.matchedFields,
+  };
 }
 
 function PageLink({

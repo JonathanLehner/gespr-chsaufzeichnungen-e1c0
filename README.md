@@ -27,7 +27,10 @@ Verkaufsgespräche der Immotrust AG.
   selbst. Die Änderung zieht die bereits gespeicherten Kopien an Kommentaren, Bewertungen und
   hochgeladenen Aufnahmen mit; die E-Mail-Adresse bleibt als Kennung unverändert.
 - **Aufnahmenübersicht**: Tabelle mit allen Metadaten, Volltextsuche über Metadaten und Transkripte
-  mit hervorgehobenen Ausschnitten, Filter, Sortierung und serverseitige Seitennavigation.
+  mit hervorgehobenen Ausschnitten, Filter, Sortierung und serverseitige Seitennavigation. Die
+  Tabelle baut auf TanStack Table auf; jede Datenspalte sortiert per Klick auf den Kopf
+  (`?sort=<spalte>&dir=asc|desc`, Schlüssel in `src/lib/recording-sort.ts`) über den ganzen
+  gefilterten Bestand, die Auswahl „Sortieren nach“ im Filter zeigt dieselbe Sortierung.
 - **Detailansicht**: WaveSurfer.js-Player (Wiedergabe, Scrubbing, Lautstärke, Tempo), synchron
   mitlaufendes Transkript, Sprung per Klick auf einen Satz, Suche im Transkript, Kommentare und
   persönliche Bewertung von 1 bis 10.

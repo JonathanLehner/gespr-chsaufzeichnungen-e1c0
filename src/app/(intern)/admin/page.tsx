@@ -53,7 +53,7 @@ export default async function AdminPage() {
       getTemplateSettings(),
       listJobs(),
       countByStatus(),
-      listRecordings({ loeschstatus: "nur_markiert", pageSize: 100, sort: "hochgeladen_neu" }),
+      listRecordings({ loeschstatus: "nur_markiert", pageSize: 100, sort: "hochgeladen", dir: "desc" }),
       findMany<User>(Collections.users, {}),
       findMany<MailOutboxEntry>(Collections.mailOutbox, {}),
       countDocuments(Collections.recordings, {}),

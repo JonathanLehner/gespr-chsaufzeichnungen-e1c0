@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { SortKey } from "@/lib/recordings";
+import type { SortDir, SortKey } from "@/lib/recording-sort";
 
 export type FilterValues = {
   q: string;
@@ -11,16 +11,21 @@ export type FilterValues = {
   bewertungBis: string;
   loeschstatus: string;
   sort: SortKey;
+  dir: SortDir;
   pageSize: string;
 };
 
+/** Gleiche Schlüssel wie die Spaltenköpfe der Tabelle (`?sort=…&dir=…`). */
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-  { value: "gespraech_neu", label: "Gespräch – neuste zuerst" },
-  { value: "gespraech_alt", label: "Gespräch – älteste zuerst" },
-  { value: "hochgeladen_neu", label: "Upload – neuste zuerst" },
-  { value: "name_az", label: "Anrufername A–Z" },
-  { value: "bewertung_hoch", label: "Bewertung – höchste zuerst" },
-  { value: "bewertung_tief", label: "Bewertung – tiefste zuerst" },
+  { value: "zeitpunkt", label: "Gesprächszeitpunkt" },
+  { value: "anrufer", label: "Anrufer" },
+  { value: "telefon", label: "Telefonnummer" },
+  { value: "anrufnr", label: "Anrufnr." },
+  { value: "dauer", label: "Dauer" },
+  { value: "hochgeladen_von", label: "Hochgeladen von" },
+  { value: "bewertung", label: "Bewertung" },
+  { value: "transkription", label: "Transkription" },
+  { value: "loeschmarkierung", label: "Löschmarkierung" },
 ];
 
 export function RecordingsFilter({
@@ -124,16 +129,28 @@ export function RecordingsFilter({
             <option value="nur_markiert">Nur vorgemerkte</option>
           </select>
         </div>
-        <div>
-          <label className="label" htmlFor="sort">
-            Sortierung
-          </label>
-          <select id="sort" name="sort" defaultValue={values.sort} className="field">
-            {SORT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
+        {/* Der Schlüssel erneuert die Auswahl, wenn über einen Spaltenkopf sortiert wurde. */}
+        <div key={`${values.sort}-${values.dir}`} className="flex items-end gap-1.5">
+          <div className="w-[11.5rem]">
+            <label className="label whitespace-nowrap" htmlFor="sort">
+              Sortieren nach
+            </label>
+            <select id="sort" name="sort" defaultValue={values.sort} className="field">
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <select
+            name="dir"
+            defaultValue={values.dir}
+            className="field w-[8.5rem]"
+            aria-label="Reihenfolge"
+          >
+            <option value="asc">Aufsteigend</option>
+            <option value="desc">Absteigend</option>
           </select>
         </div>
         <div>

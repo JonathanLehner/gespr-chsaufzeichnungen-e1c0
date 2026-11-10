@@ -415,26 +415,43 @@ record(
 );
 await shot("07b-filter");
 
-/* 7d – Sortierung */
-await visit(`/aufnahmen?sort=name_az`);
-const namesAz = (await page.locator("tbody tr td:nth-child(2)").allInnerTexts()).map((cell) =>
-  cell.trim(),
-);
-const sortedAz = [...namesAz].sort((a, b) => a.localeCompare(b, "de-CH"));
+/* 7d – Sortierung über die Spaltenköpfe, seitenübergreifend */
+async function columnAcrossPages(path, nth) {
+  const values = [];
+  for (let pageNo = 1; pageNo <= 3; pageNo += 1) {
+    await visit(`${path}&pageSize=5&page=${pageNo}`);
+    values.push(
+      ...(await page.locator(`tbody tr:not([data-row="treffer"]) td:nth-child(${nth})`).allInnerTexts()),
+    );
+  }
+  return values.map((cell) => cell.trim());
+}
+const namesAz = await columnAcrossPages(`/aufnahmen?sort=anrufer&dir=asc`, 2);
+const sortedAz = [...namesAz].sort((a, b) => a.localeCompare(b, "de-CH", { sensitivity: "base" }));
 record(
-  "Sortierung nach Anrufername",
+  "Sortierung nach Anrufer über mehrere Seiten",
   JSON.stringify(namesAz) === JSON.stringify(sortedAz),
   namesAz.join(" | "),
 );
-await visit(`/aufnahmen?sort=bewertung_hoch`);
-const scores = (await page.locator("tbody tr td:nth-child(7)").allInnerTexts()).map((cell) => {
+const scores = (await columnAcrossPages(`/aufnahmen?sort=bewertung&dir=desc`, 7)).map((cell) => {
   const match = /(\d+(?:[.,]\d)?)/.exec(cell);
   return match ? Number(match[1].replace(",", ".")) : -1;
 });
+const rated = scores.filter((value) => value >= 0);
 record(
-  "Sortierung nach Bewertung absteigend",
-  scores.every((value, index) => index === 0 || scores[index - 1] >= value),
+  "Sortierung nach Bewertung absteigend, ohne Bewertung zuletzt",
+  rated.every((value, index) => index === 0 || rated[index - 1] >= value) &&
+    (scores.indexOf(-1) === -1 || scores.slice(scores.indexOf(-1)).every((value) => value === -1)),
   scores.join(", "),
+);
+await visit(`/aufnahmen?sort=dauer&dir=asc&page=2`);
+await page.locator('th[aria-sort] button:has-text("Anrufer")').click();
+await page.waitForURL(/sort=anrufer&dir=asc/);
+record(
+  "Klick auf Spaltenkopf sortiert und springt auf Seite 1",
+  !page.url().includes("page=") &&
+    (await page.locator('th:has-text("Anrufer")').getAttribute("aria-sort")) === "ascending",
+  page.url(),
 );
 
 /* 7e – Serverseitige Seitennavigation */

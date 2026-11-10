@@ -21,6 +21,12 @@ import type {
   TranscriptIndexDoc,
   TranscriptionStatus,
 } from "./types";
+import { DEFAULT_SORT, type SortDir, type SortKey } from "./recording-sort";
+
+export type { SortDir, SortKey } from "./recording-sort";
+
+/** Spaltensortierung der Liste plus Upload-Zeitpunkt für das Admin-Dashboard. */
+type ListSortKey = SortKey | "hochgeladen";
 
 export const BUCKET_SIZE = 50;
 const MAX_BUCKET_SCAN = 200; // deckt 10'000 Aufnahmen ab
@@ -137,13 +143,79 @@ async function loadAllRecordings(): Promise<Recording[]> {
   return rows;
 }
 
-export type SortKey =
-  | "gespraech_neu"
-  | "gespraech_alt"
-  | "hochgeladen_neu"
-  | "name_az"
-  | "bewertung_hoch"
-  | "bewertung_tief";
+/** Aufsteigende Reihenfolge der Transkriptionsstatus: entlang des Ablaufs, Fehler zuletzt. */
+const STATUS_ORDER: Record<TranscriptionStatus, number> = {
+  wartend: 0,
+  in_arbeit: 1,
+  abgeschlossen: 2,
+  ohne_sprache: 3,
+  fehlgeschlagen: 4,
+};
+
+const textCollator = new Intl.Collator("de-CH", { sensitivity: "base" });
+const numberCollator = new Intl.Collator("de-CH", { numeric: true });
+
+type SortValue = string | number | null;
+
+/** Liefert je Spalte den Vergleichswert; `null` steht für einen leeren Wert. */
+function sortValues(row: Recording, key: ListSortKey): SortValue[] {
+  const text = (value: string | null | undefined) => (value?.trim() ? value.trim() : null);
+  switch (key) {
+    case "zeitpunkt":
+      return [row.callAtUtc || null];
+    case "hochgeladen":
+      return [row.uploadedAt || null];
+    case "anrufer":
+      return [text(row.callerName)];
+    case "telefon":
+      return [text(row.phoneNumber)];
+    case "anrufnr":
+      return [text(row.callNumber)];
+    case "dauer":
+      return [row.durationMs ?? null];
+    case "hochgeladen_von":
+      return [text(row.uploadedByName)];
+    case "bewertung":
+      return row.ratingAverage === null || !row.ratingCount
+        ? [null]
+        : [row.ratingAverage, row.ratingCount];
+    case "transkription":
+      return [STATUS_ORDER[row.transcriptionStatus] ?? null];
+    case "loeschmarkierung":
+      return [row.deletionFlagged ? 1 : 0];
+  }
+}
+
+function compareValue(a: SortValue, b: SortValue, key: ListSortKey): number {
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  const collator = key === "telefon" || key === "anrufnr" ? numberCollator : textCollator;
+  return collator.compare(String(a), String(b));
+}
+
+/**
+ * Vergleicht zwei Aufnahmen nach der gewählten Spalte. Leere Werte stehen in
+ * beiden Richtungen am Ende; bei Gleichstand entscheidet der Gesprächszeitpunkt
+ * (neuste zuerst) und danach die Kennung, damit die Seiten stabil bleiben.
+ */
+function compareRecordings(a: Recording, b: Recording, key: ListSortKey, dir: SortDir): number {
+  const left = sortValues(a, key);
+  const right = sortValues(b, key);
+  const sign = dir === "asc" ? 1 : -1;
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const x = left[index] ?? null;
+    const y = right[index] ?? null;
+    if (x === null && y === null) continue;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    const result = compareValue(x, y, key);
+    if (result !== 0) return sign * result;
+  }
+  if (key !== "zeitpunkt") {
+    const byTime = b.callAtUtc.localeCompare(a.callAtUtc);
+    if (byTime !== 0) return byTime;
+  }
+  return a._id.localeCompare(b._id);
+}
 
 export type RecordingQuery = {
   q?: string;
@@ -154,7 +226,8 @@ export type RecordingQuery = {
   bewertungVon?: number;
   bewertungBis?: number;
   loeschstatus?: "alle" | "nur_markiert" | "ohne_markiert";
-  sort?: SortKey;
+  sort?: ListSortKey;
+  dir?: SortDir;
   page?: number;
   pageSize?: number;
 };
@@ -250,23 +323,9 @@ export async function listRecordings(query: RecordingQuery): Promise<RecordingLi
     rows.push({ ...recording, hits: [], hitCount: 0, matchedFields });
   }
 
-  const sort = query.sort ?? "gespraech_neu";
-  rows.sort((a, b) => {
-    switch (sort) {
-      case "gespraech_alt":
-        return a.callAtUtc.localeCompare(b.callAtUtc);
-      case "hochgeladen_neu":
-        return b.uploadedAt.localeCompare(a.uploadedAt);
-      case "name_az":
-        return a.callerName.localeCompare(b.callerName, "de-CH");
-      case "bewertung_hoch":
-        return (b.ratingAverage ?? -1) - (a.ratingAverage ?? -1);
-      case "bewertung_tief":
-        return (a.ratingAverage ?? 11) - (b.ratingAverage ?? 11);
-      default:
-        return b.callAtUtc.localeCompare(a.callAtUtc);
-    }
-  });
+  const sortKey = query.sort ?? DEFAULT_SORT.key;
+  const sortDir = query.dir ?? DEFAULT_SORT.dir;
+  rows.sort((a, b) => compareRecordings(a, b, sortKey, sortDir));
 
   const total = rows.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
