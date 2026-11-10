@@ -405,6 +405,7 @@ export async function hardDeleteRecording(recordingId: string): Promise<void> {
     deleteById(Collections.recordings, recordingId),
     deleteById(Collections.transcriptIndex, recordingId),
     deleteMany(Collections.transcriptParts, { recordingId }),
+    deleteMany(Collections.transcriptHistoryParts, { recordingId }),
     deleteMany(Collections.comments, { recordingId }),
     deleteMany(Collections.ratings, { recordingId }),
     deleteById(Collections.jobs, recordingId),

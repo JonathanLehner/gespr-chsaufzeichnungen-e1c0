@@ -49,9 +49,16 @@
  *  - „Nach vorne“ im Dashboard setzt `priority`; solche Aufträge kommen zuerst.
  *
  * Die Audiodatei wird über ihre Adresse geholt (`/api/dateien/<schlüssel>` der
- * Anwendung, die aus dem R2-Bucket liefert) und mit ffmpeg in Abschnitte von
- * einer Minute geteilt, die als Opus mit 16 kbit/s direkt in der Anfrage
- * mitgehen (rund 160 KB je Abschnitt, Grenze des Endpunkts 200 KB).
+ * Anwendung, die aus dem R2-Bucket liefert) und mit ffmpeg in Abschnitte
+ * geteilt:
+ *  - Flash-Modelle (Plattform-Endpunkt `/gemini`): eine Minute, als Opus mit
+ *    16 kbit/s direkt in der Anfrage (rund 160 KB, Grenze des Endpunkts 200 KB),
+ *    Antwort an `responseSchema` gebunden.
+ *  - gemini-3.5-transcribe (Gemini API direkt mit `GEMINI_API_KEY`): höchstens
+ *    `DIRECT_CHUNK_MAX_MS`, in einer Pause geschnitten, Upload über die Files
+ *    API und Transkription über die Interactions-API mit Wortzeiten und
+ *    Sprechern. Der Schlüssel wird nie protokolliert; Fehler werden nur mit
+ *    ihrer Meldung weitergegeben.
  */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -59,10 +66,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { GoogleGenAI } from "@google/genai";
 import { MongoClient, type ChangeStream, type Collection } from "mongodb";
 import { claimJob } from "./claim";
 import { AbortedWhileWaiting, GeminiLimiter, QueueHalted } from "./limiter";
-import { alignTranscript } from "./shared/forced-alignment";
+import { energyEnvelope } from "./shared/audio-envelope";
+import { boundsAtPauses, fixedBounds, type ChunkBounds } from "./shared/chunk-bounds";
+import { alignTranscript, detectSpeech } from "./shared/forced-alignment";
 import {
   BASE_VOCABULARY,
   EMPTY_USAGE,
@@ -74,6 +84,7 @@ import {
   legacyTranscriptMeta,
   normalizeVocabulary,
   resolveModel,
+  usageFromInteraction,
   usageFromMetadata,
   vocabularyPrompt,
   type TokenUsage,
@@ -101,6 +112,7 @@ import {
 } from "./shared/queue";
 import {
   PROMPT,
+  TRANSCRIPT_RESPONSE_SCHEMA,
   buildTranscriptIndex,
   chunkPrompt,
   mergeChunks,
@@ -111,6 +123,8 @@ import {
   type NormalizedTranscript,
 } from "./shared/transcript";
 import type { AudioMime, TranscriptSegment } from "./shared/types";
+import { correctVocabulary } from "./shared/vocabulary-correction";
+import { segmentsFromWords, type WordAnnotation } from "./shared/word-timestamps";
 
 const run = promisify(execFile);
 
@@ -118,6 +132,8 @@ const run = promisify(execFile);
 const geminiUrl = () => process.env.TRANSCRIBER_GEMINI_URL || "https://www.clawcorp.ai/api/platform/gemini";
 /** Sammlung mit einem Eintrag je abgeschlossenem Lauf (Kosten je Monat im Dashboard). */
 const RUNS_COLLECTION = "transcription_runs";
+/** Abgelöste Transkripte (Text samt Zeiten) bei einer Neu-Transkription. */
+const HISTORY_PARTS_COLLECTION = "transcript_history_parts";
 /** Wird ein Auftrag so oft verwaist vorgefunden, wird er zurückgestellt statt sofort fortgesetzt. */
 const MAX_STALE_CLAIMS = 2;
 const CHUNK_MS = 60 * 1000;
@@ -130,6 +146,15 @@ const CHUNK_RETRY_PAUSE_MS = 2000;
 const GEMINI_TIMEOUT_MS = 120 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 120 * 1000;
 const BITRATES = ["16k", "14k", "12k"];
+/**
+ * Längster Abschnitt für gemini-3.5-transcribe. Google erlaubt mit Wortzeiten
+ * und Sprechern 30 min je Anfrage, begrenzt aber in Stufe 1 auf 10 000
+ * Eingabe-Tokens je Minute (rund 1500 Tokens je Audiominute). Ein längerer
+ * Abschnitt würde nie angenommen.
+ */
+const DIRECT_CHUNK_MAX_MS = 5 * 60 * 1000;
+const DIRECT_BITRATE = "24k";
+const UPLOAD_TIMEOUT_MS = 45 * 1000;
 /** Base64-Länge, ab der ein Abschnitt mit geringerer Bitrate neu kodiert wird. */
 const MAX_INLINE_CHARS = 180 * 1024;
 /** Längste Ruhepause ohne Änderung an `jobs`, als Absicherung des Change Streams. */
@@ -149,9 +174,15 @@ type Progress = {
   failed: number[];
   /** Modell dieses Zwischenstands; ein anderes Modell beginnt von vorn. */
   model?: string;
+  /** Grenzen der Abschnitte; fehlt bei älteren Zwischenständen (feste 60 s). */
+  bounds?: ChunkBounds[];
   /** Summe der Tokens aller beantworteten Anfragen dieses Auftrags. */
   usage?: TokenUsage;
   modelVersion?: string | null;
+  /** Antworten, die kein gültiges JSON waren (Dashboard). */
+  invalidReplies?: number;
+  /** Nachkorrekturen aus dem Vokabular (gemini-3.5-transcribe). */
+  corrections?: number;
 };
 
 type JobDoc = {
@@ -209,6 +240,7 @@ type RunDoc = {
   audioMs: number | null;
   usage: TokenUsage;
   costUsd: number;
+  invalidReplies: number;
 };
 
 type WorkerDoc = {
@@ -228,6 +260,7 @@ type Db = {
   jobs: Collection<JobDoc>;
   recordings: Collection<RecordingDoc>;
   parts: Collection<{ _id: string }>;
+  historyParts: Collection<{ _id: string }>;
   index: Collection<{ _id: string }>;
   workers: Collection<WorkerDoc>;
   limiter: Collection<LimiterDoc>;
@@ -456,7 +489,7 @@ function claimNext(db: Db, lockId: string, newestFirst: boolean, allowBackground
  */
 async function readTranscriptionConfig(db: Db, jobModel: string | null | undefined) {
   const doc = await db.config.findOne({ _id: TRANSCRIPTION_SETTINGS_ID });
-  const model = resolveModel(jobModel || doc?.model);
+  const model = resolveModel(jobModel || doc?.model, hasDirectKey());
   let vocabulary = doc?.vocabulary;
   if (!vocabulary) {
     const names = await db.recordings
@@ -476,6 +509,9 @@ class PermanentError extends Error {}
 
 /** Inhaltlicher Fehler einer einzelnen Anfrage (ungültige Antwort, 400, 413). */
 class ContentError extends Error {}
+
+/** Antwort war kein gültiges JSON: einmal wiederholen, dann zurückstellen statt Lücke. */
+class InvalidReplyError extends ContentError {}
 
 /** Monatliches Kostenlimit des Kontos erreicht: sperrt alle Anfragen. */
 class SpendingLimitError extends Error {}
@@ -531,30 +567,37 @@ async function probeAudio(file: string): Promise<number | null> {
   return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
 }
 
-async function encodeChunk(file: string, startMs: number, bitrate: string): Promise<string> {
+async function encodeChunk(file: string, bounds: ChunkBounds, bitrate: string): Promise<Buffer> {
   const { stdout } = await run(
     "ffmpeg",
     [
-      "-loglevel", "error", "-ss", String(startMs / 1000), "-t", String(CHUNK_MS / 1000),
+      "-loglevel", "error", "-ss", String(bounds.startMs / 1000), "-t", String((bounds.endMs - bounds.startMs) / 1000),
       "-i", file, "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", bitrate,
       "-application", "voip", "-f", "ogg", "pipe:1",
     ],
-    { encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
+    { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
   );
-  return stdout.toString("base64");
+  return stdout;
+}
+
+/** Sprechbereiche für die Schnitte von gemini-3.5-transcribe; `null` bei unlesbarem Format. */
+function speechRegions(bytes: Uint8Array, mime: AudioMime) {
+  if (mime !== "audio/wav" && mime !== "audio/mpeg") return null;
+  const envelope = energyEnvelope(bytes, mime);
+  return envelope ? detectSpeech(envelope) : null;
 }
 
 /* --------------------------------------------------------------- Dienst */
 
-type ChunkAnswer = { transcript: NormalizedTranscript; usage: TokenUsage; modelVersion: string | null };
+type ChunkAnswer = { transcript: NormalizedTranscript; usage: TokenUsage; modelVersion: string | null; corrections?: number };
 
+/** Flash-Modelle über den Plattform-Endpunkt, Antwort an `responseSchema` gebunden. */
 async function requestTranscript(
   model: TranscriptionModel,
   prompt: string,
   audioBase64: string,
   signal: AbortSignal,
 ): Promise<ChunkAnswer> {
-  // Nur der Prompt-Weg ist über den Plattform-Endpunkt nutzbar (siehe `shared/models.ts`).
   if (model.path !== "prompt") throw new PermanentError(`Das Modell ${model.id} ist nicht verfügbar.`);
   let res: Response;
   try {
@@ -566,7 +609,12 @@ async function requestTranscript(
         contents: [
           { role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "audio/ogg", data: audioBase64 } }] },
         ],
-        generationConfig: { responseMimeType: "application/json", temperature: 0, ...model.generationConfig },
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: TRANSCRIPT_RESPONSE_SCHEMA,
+          temperature: 0,
+          ...model.generationConfig,
+        },
       }),
       signal: AbortSignal.any([AbortSignal.timeout(GEMINI_TIMEOUT_MS), signal]),
     });
@@ -590,18 +638,109 @@ async function requestTranscript(
     if ([400, 413, 415, 422].includes(res.status) && !isTransientError(message)) throw new ContentError(failure);
     throw new Error(failure);
   }
+  let body: { text?: string; response?: { usageMetadata?: Parameters<typeof usageFromMetadata>[0]; modelVersion?: string } };
   try {
-    const body = JSON.parse(text) as {
-      text?: string;
-      response?: { usageMetadata?: Parameters<typeof usageFromMetadata>[0]; modelVersion?: string };
-    };
-    return {
-      transcript: normalizeTranscript(parseJsonLoosely(body.text ?? "")),
-      usage: usageFromMetadata(body.response?.usageMetadata),
-      modelVersion: body.response?.modelVersion ?? null,
-    };
+    body = JSON.parse(text);
   } catch (error) {
-    throw new ContentError(errorText(error));
+    throw new ContentError(`/gemini: unlesbare Antwort (${errorText(error)})`);
+  }
+  const usage = usageFromMetadata(body.response?.usageMetadata);
+  const modelVersion = body.response?.modelVersion ?? null;
+  try {
+    return { transcript: normalizeTranscript(parseJsonLoosely(body.text ?? "")), usage, modelVersion };
+  } catch (error) {
+    // Die Anfrage ist trotzdem berechnet worden.
+    throw Object.assign(new InvalidReplyError(`Ungültiges JSON vom Modell: ${errorText(error)}`), { usage, modelVersion });
+  }
+}
+
+const hasDirectKey = () => !!process.env.GEMINI_API_KEY;
+
+/** Client je Anfrage; der Schlüssel wird erst hier gelesen. Eigene Wiederholungen des SDK aus: Das übernimmt die Drossel. */
+function directClient(): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey: env("GEMINI_API_KEY"),
+    apiVersion: "v1beta",
+    httpOptions: { retryOptions: { attempts: 1 } },
+  });
+}
+
+/** Ordnet einen Fehler des SDK den Regeln des Dienstes zu, nur mit Status und Meldung. */
+function directFailure(step: string, error: unknown): Error {
+  const status = (error as { status?: number }).status;
+  const raw = error instanceof Error ? error.message : String(error);
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return new Error(`Gemini API (${step}): Zeitüberschreitung oder abgebrochen.`);
+  }
+  const message = `Gemini API ${step} fehlgeschlagen${status ? ` (${status})` : ""}: ${raw.slice(0, 400)}`;
+  if (isSpendingLimitError(raw)) return new SpendingLimitError(message);
+  if (status && [400, 413, 415, 422].includes(status) && !isTransientError(raw)) return new ContentError(message);
+  // 401/403 (Schlüssel), 404, 429, 5xx und Netzwerk: vorübergehend, der Auftrag wird zurückgestellt.
+  return new Error(message);
+}
+
+/**
+ * gemini-3.5-transcribe direkt bei Google: Upload über die Files API
+ * (fortsetzbar, vom SDK erledigt), dann Interactions-API mit Wortzeiten und
+ * Sprechern. `custom_vocabulary` lehnt Google in dieser Kombination ab; das
+ * Vokabular wird nachträglich auf die Wörter angewendet.
+ */
+async function requestDirectTranscript(
+  audio: Buffer,
+  offsetMs: number,
+  vocabulary: readonly string[],
+  signal: AbortSignal,
+): Promise<ChunkAnswer> {
+  const ai = directClient();
+  let uploaded: { name?: string; uri?: string };
+  try {
+    uploaded = await ai.files.upload({
+      file: new Blob([new Uint8Array(audio)], { type: "audio/ogg" }),
+      config: { mimeType: "audio/ogg", abortSignal: AbortSignal.any([AbortSignal.timeout(UPLOAD_TIMEOUT_MS), signal]) },
+    });
+  } catch (error) {
+    throw directFailure("Upload", error);
+  }
+  try {
+    if (!uploaded.uri) throw new Error("Upload ohne Adresse.");
+    let response: {
+      model?: string;
+      usage?: Parameters<typeof usageFromInteraction>[0];
+      steps?: { type?: string; content?: { type?: string; annotations?: WordAnnotation[] }[] }[];
+    };
+    try {
+      response = (await ai.interactions.create(
+        {
+          model: "gemini-3.5-transcribe",
+          input: [{ type: "audio", uri: uploaded.uri, mime_type: "audio/ogg" }],
+          generation_config: {
+            transcription_config: {
+              mode: { type: "verbatim", diarization_mode: "speaker", timestamp_granularities: ["word"] },
+            },
+          },
+        } as Parameters<typeof ai.interactions.create>[0],
+        { signal: AbortSignal.any([AbortSignal.timeout(GEMINI_TIMEOUT_MS), signal]), retries: { strategy: "none" } },
+      )) as typeof response;
+    } catch (error) {
+      throw directFailure("Transkription", error);
+    }
+    const usage = usageFromInteraction(response.usage);
+    const words = (response.steps ?? [])
+      .flatMap((step) => step.content ?? [])
+      .flatMap((content) => content.annotations ?? [])
+      .filter((annotation) => annotation.type === "word_info");
+    const corrected = correctVocabulary(words, vocabulary);
+    const built = segmentsFromWords(corrected.words, offsetMs);
+    const endMs = built.segments.length > 0 ? built.segments[built.segments.length - 1].endMs : 0;
+    return {
+      transcript: { ...built, endMs },
+      usage,
+      modelVersion: response.model ?? null,
+      corrections: corrected.corrections,
+    };
+  } finally {
+    // Aufräumen ist nicht kritisch: Google löscht hochgeladene Dateien nach 48 h selbst.
+    if (uploaded.name) await ai.files.delete({ name: uploaded.name }).catch(() => undefined);
   }
 }
 
@@ -612,16 +751,10 @@ class LockLost extends Error {}
 let limiter: GeminiLimiter;
 
 /** Eine Anfrage an den Dienst, eingereiht in die gemeinsame Drossel. */
-async function throttledTranscript(
-  model: TranscriptionModel,
-  prompt: string,
-  audio: string,
-  signal: AbortSignal,
-  recordingId: string,
-) {
+async function throttled<T>(request: () => Promise<T>, signal: AbortSignal, recordingId: string): Promise<T> {
   const lease = await limiter.acquire(signal);
   try {
-    const result = await requestTranscript(model, prompt, audio, signal);
+    const result = await request();
     await limiter.release(lease, { ok: true });
     return result;
   } catch (error) {
@@ -828,8 +961,14 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     await writeFile(file, bytes);
     const measuredMs = await probeAudio(file);
     const durationMs = measuredMs ?? recording.durationMs ?? CHUNK_MS;
-    const chunkCount = Math.max(1, Math.ceil(durationMs / CHUNK_MS));
     const { model, vocabulary } = await readTranscriptionConfig(db, before.model);
+    const direct = model.route === "direkt";
+    const mime = recording.mimeType as AudioMime;
+    // gemini-3.5-transcribe: lange Abschnitte, in einer Pause geschnitten; Flash: feste Minute.
+    const bounds = direct
+      ? boundsAtPauses(durationMs, DIRECT_CHUNK_MAX_MS, speechRegions(bytes, mime))
+      : fixedBounds(durationMs, CHUNK_MS);
+    const chunkCount = bounds.length;
     const vocabularyText = vocabularyPrompt(vocabulary);
 
     // Ein Zwischenstand ohne Modellangabe stammt vom bisherigen Modell.
@@ -838,6 +977,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
         ? progress
         : { chunkCount, chunks: new Array(chunkCount).fill(null), failed: [], model: model.id, usage: { ...EMPTY_USAGE } };
     state.model = model.id;
+    state.bounds = bounds;
     state.usage ??= { ...EMPTY_USAGE };
     progress = state;
     const pending = state.chunks
@@ -865,22 +1005,33 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const chunkWorker = async () => {
       while (next < pending.length && !stopRun()) {
         const index = pending[next++];
-        const startMs = index * CHUNK_MS;
+        const chunk = bounds[index];
+        const startMs = chunk.startMs;
         const prompt = (chunkCount === 1 ? PROMPT : chunkPrompt(index, chunkCount)) + vocabularyText;
         let result: NormalizedTranscript | null = null;
         let transientError: string | null = null;
+        let invalid = 0;
         for (let attempt = 1; attempt <= CHUNK_ATTEMPTS && !result && !stopRun(); attempt += 1) {
           try {
-            // Jeder Anlauf mit anderer Bitrate: Eine Wiederholung mit identischer
-            // Anfrage blieb in der Messung beim Dienst wiederholt hängen.
-            const bitrate = BITRATES[attempt - 1] ?? "12k";
-            let audio = await encodeChunk(file, startMs, bitrate);
-            if (audio.length > MAX_INLINE_CHARS) audio = await encodeChunk(file, startMs, "10k");
-            const answer = await throttledTranscript(model, prompt, audio, signal, id);
+            let answer: ChunkAnswer;
+            if (direct) {
+              const audio = await encodeChunk(file, chunk, DIRECT_BITRATE);
+              // Wortzeiten kommen schon auf die Gesprächszeit verschoben zurück.
+              answer = await throttled(() => requestDirectTranscript(audio, startMs, vocabulary, signal), signal, id);
+            } else {
+              // Jeder Anlauf mit anderer Bitrate: Eine Wiederholung mit identischer
+              // Anfrage blieb in der Messung beim Dienst wiederholt hängen.
+              const bitrate = BITRATES[attempt - 1] ?? "12k";
+              let audio = (await encodeChunk(file, chunk, bitrate)).toString("base64");
+              if (audio.length > MAX_INLINE_CHARS) audio = (await encodeChunk(file, chunk, "10k")).toString("base64");
+              answer = await throttled(() => requestTranscript(model, prompt, audio, signal), signal, id);
+              answer = { ...answer, transcript: { ...answer.transcript, segments: shiftSegments(answer.transcript.segments, startMs) } };
+            }
             // Jede beantwortete Anfrage wird berechnet, auch wenn ein späterer Anlauf sie ersetzt.
             state.usage = addUsage(state.usage ?? EMPTY_USAGE, answer.usage);
             state.modelVersion = answer.modelVersion ?? state.modelVersion ?? null;
-            result = { ...answer.transcript, segments: shiftSegments(answer.transcript.segments, startMs) };
+            state.corrections = (state.corrections ?? 0) + (answer.corrections ?? 0);
+            result = answer.transcript;
             transientError = null;
           } catch (error) {
             if (interrupted() || error instanceof AbortedWhileWaiting) break;
@@ -892,6 +1043,18 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
             await limiter
               .recordError(id, `Abschnitt ${index + 1}/${chunkCount}: ${errorText(error)}`)
               .catch(() => undefined);
+            if (error instanceof InvalidReplyError) {
+              // Berechnet und gezählt; einmal wiederholen, danach Abschnitt offen lassen statt Lücke.
+              const billed = (error as InvalidReplyError & { usage?: TokenUsage }).usage;
+              if (billed) state.usage = addUsage(state.usage ?? EMPTY_USAGE, billed);
+              state.invalidReplies = (state.invalidReplies ?? 0) + 1;
+              invalid += 1;
+              if (invalid >= 2) {
+                transientError = "Das Modell hat zweimal kein gültiges JSON geliefert.";
+                break;
+              }
+              continue;
+            }
             transientError = error instanceof ContentError ? null : errorText(error);
             if (transientError && attempt >= CHUNK_TRANSIENT_ATTEMPTS) break;
             if (attempt < CHUNK_ATTEMPTS) await sleep(CHUNK_RETRY_PAUSE_MS);
@@ -938,16 +1101,16 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const merged = mergeChunks(done);
     const gaps = [...state.failed]
       .sort((a, b) => a - b)
-      .map((index) => ({ startMs: index * CHUNK_MS, endMs: Math.min((index + 1) * CHUNK_MS, durationMs) }));
+      .map((index) => ({ startMs: bounds[index].startMs, endMs: bounds[index].endMs }));
 
-    const mime = recording.mimeType as AudioMime;
+    // Wortzeiten des Modells bleiben; geschätzte Zeiten werden an der Aufnahme ausgerichtet.
     const aligned =
-      mime === "audio/wav" || mime === "audio/mpeg"
+      model.timing === "schaetzung" && (mime === "audio/wav" || mime === "audio/mpeg")
         ? alignTranscript(merged.segments, bytes, mime, { gaps })
         : null;
     const segments = aligned?.segments ?? merged.segments;
 
-    await saveTranscript(db, id, segments, merged.speakerLabels);
+    await saveTranscript(db, id, segments, merged.speakerLabels, recording.transcript?.at ?? recording.transcriptionFinishedAt ?? null);
     const endMs = segments.length > 0 ? segments[segments.length - 1].endMs : 0;
     const duration = measuredMs ?? recording.durationMs ?? endMs;
     const at = iso();
@@ -970,7 +1133,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
             wordCount: merged.wordCount,
             transcriptionChunks: chunkCount,
             transcriptionGaps: gaps.length > 0 ? gaps : null,
-            transcriptionAlignment: aligned ? "akustisch" : "geschaetzt",
+            transcriptionAlignment: aligned || model.timing === "modell" ? "akustisch" : "geschaetzt",
             ...(duration > 0 ? { durationMs: duration } : {}),
             transcript: { $literal: meta },
             // Bisheriges Transkript in die Historie; fehlt seine Herkunft, war es gemini-2.5-flash.
@@ -990,6 +1153,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       audioMs: meta.audioMs,
       usage,
       costUsd: meta.costUsd ?? 0,
+      invalidReplies: state.invalidReplies ?? 0,
     });
     const status = segments.length === 0 ? "ohne_sprache" : "abgeschlossen";
     await finish(status);
@@ -1050,8 +1214,30 @@ async function retimeTranscript(db: Db, recording: RecordingDoc, bytes: Uint8Arr
   return `neu ausgerichtet, ${aligned.regionCount} Sprachbereiche`;
 }
 
-/** Gleiche Ablage wie `saveTranscript` in `src/lib/transcription.ts`. */
-async function saveTranscript(db: Db, recordingId: string, segments: TranscriptSegment[], speakerLabels: string[]) {
+/**
+ * Gleiche Ablage wie `saveTranscript` in `src/lib/transcription.ts`. Ersetzt
+ * eine neue Transkription ein vorhandenes Transkript, wird dessen Text samt
+ * Zeiten vorher nach `transcript_history_parts` kopiert (`replacedAt` setzt
+ * die Fassung mit ihrem Eintrag in `transcriptHistory` in Beziehung).
+ */
+async function saveTranscript(
+  db: Db,
+  recordingId: string,
+  segments: TranscriptSegment[],
+  speakerLabels: string[],
+  archiveVersion?: string | null,
+) {
+  if (archiveVersion !== undefined) {
+    const replacedAt = iso();
+    const old = await db.parts.find({ recordingId } as Record<string, unknown>).toArray();
+    for (const part of old) {
+      await db.historyParts.replaceOne(
+        { _id: `${part._id}@${archiveVersion ?? replacedAt}` },
+        { ...part, _id: `${part._id}@${archiveVersion ?? replacedAt}`, partId: part._id, version: archiveVersion, replacedAt },
+        { upsert: true },
+      );
+    }
+  }
   await db.parts.deleteMany({ recordingId });
   for (const part of splitIntoParts(recordingId, segments)) await db.parts.insertOne(part);
   const index = buildTranscriptIndex(recordingId, segments, speakerLabels);
@@ -1154,12 +1340,14 @@ async function requeueTransientFailures(db: Db): Promise<void> {
 
 async function main() {
   env("CLAWCORP_API_KEY");
+  log(hasDirectKey() ? "Gemini API direkt: eingerichtet." : "Gemini API direkt: nicht eingerichtet, gemini-3.5-transcribe nicht verfügbar.");
   const client = await new MongoClient(env("MONGODB_URI"), { maxPoolSize: 5 }).connect();
   const database = client.db();
   const db: Db = {
     jobs: database.collection<JobDoc>("jobs"),
     recordings: database.collection<RecordingDoc>("recordings"),
     parts: database.collection("transcript_parts"),
+    historyParts: database.collection(HISTORY_PARTS_COLLECTION),
     index: database.collection("transcript_index"),
     workers: database.collection<WorkerDoc>(WORKERS_COLLECTION),
     limiter: database.collection<LimiterDoc>(LIMITER_COLLECTION),

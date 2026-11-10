@@ -68,6 +68,8 @@ export const Collections = {
   recordings: "recordings",
   transcriptIndex: "transcript_index",
   transcriptParts: "transcript_parts",
+  /** Text abgelöster Transkripte (Neu-Transkription, schreibt der Transkriptionsdienst). */
+  transcriptHistoryParts: "transcript_history_parts",
   comments: "comments",
   ratings: "ratings",
   jobs: "jobs",

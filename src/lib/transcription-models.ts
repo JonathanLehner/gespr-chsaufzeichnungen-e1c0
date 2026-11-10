@@ -7,9 +7,11 @@ import {
   LEGACY_MODEL,
   TRANSCRIPTION_MODELS,
   TRANSCRIPTION_SETTINGS_ID,
+  availabilityNote,
   callerVocabulary,
   estimatedCostPerMinute,
   findModel,
+  isAvailable,
   normalizeVocabulary,
   resolveModel,
   type TimingMethod,
@@ -39,6 +41,11 @@ export type ModelSettingsView = {
   updatedBy: string | null;
 };
 
+/** Eigener Zugang zur Gemini API eingerichtet? Nötig für gemini-3.5-transcribe. Der Wert selbst wird nie gelesen oder angezeigt. */
+export function directKeyConfigured(): boolean {
+  return !!process.env.GEMINI_API_KEY;
+}
+
 async function readSettings(): Promise<TranscriptionSettings | null> {
   return findById<TranscriptionSettings>(Collections.settings, TRANSCRIPTION_SETTINGS_ID);
 }
@@ -57,7 +64,7 @@ export async function getModelSettings(): Promise<ModelSettingsView> {
   const stored = findModel(doc?.model)?.id ?? null;
   return {
     stored,
-    effective: resolveModel(stored).id,
+    effective: resolveModel(stored, directKeyConfigured()).id,
     vocabulary: doc?.vocabulary ?? (await defaultVocabulary()),
     vocabularyStored: !!doc?.vocabulary,
     updatedAt: doc?.updatedAt ?? null,
@@ -70,7 +77,9 @@ type Result = { ok: boolean; message: string };
 export async function saveModelSetting(id: string, by: string): Promise<Result> {
   const model = findModel(id);
   if (!model) return { ok: false, message: "Unbekanntes Modell." };
-  if (!model.available) return { ok: false, message: model.note ?? `${model.id} ist nicht verfügbar.` };
+  if (!isAvailable(model, directKeyConfigured())) {
+    return { ok: false, message: availabilityNote(model, directKeyConfigured()) ?? `${model.id} ist nicht verfügbar.` };
+  }
   const current = await readSettings();
   await upsertById(Collections.settings, TRANSCRIPTION_SETTINGS_ID, {
     model: model.id,
@@ -85,7 +94,7 @@ export async function saveVocabulary(text: string, by: string): Promise<Result &
   const terms = normalizeVocabulary(text.split(/\r?\n|;/));
   const current = await readSettings();
   await upsertById(Collections.settings, TRANSCRIPTION_SETTINGS_ID, {
-    model: current?.model ?? resolveModel(null).id,
+    model: current?.model ?? resolveModel(null, directKeyConfigured()).id,
     vocabulary: terms,
     updatedAt: new Date().toISOString(),
     updatedBy: by,
@@ -140,7 +149,9 @@ async function candidates(input: RetranscribeInput): Promise<Result & { recordin
   const model = findModel(input.model);
   if (input.kind === "transkription") {
     if (!model) return { ok: false, message: "Unbekanntes Modell.", recordings: [] };
-    if (!model.available) return { ok: false, message: model.note ?? `${model.id} ist nicht verfügbar.`, recordings: [] };
+    if (!isAvailable(model, directKeyConfigured())) {
+      return { ok: false, message: availabilityNote(model, directKeyConfigured()) ?? `${model.id} ist nicht verfügbar.`, recordings: [] };
+    }
   }
   if (input.scope === "eine") {
     const recording = await findRecording(input.target);
@@ -354,6 +365,8 @@ export type CostRow = {
   audioMinutes: number;
   costUsd: number;
   usage: TokenUsage;
+  /** Antworten ohne gültiges JSON (wiederholt, nicht als Lücke gespeichert). */
+  invalidReplies: number;
 };
 
 /** Tatsächliche Kosten aus `transcription_runs`, je Monat (Europe/Zurich) und Modell, neueste zuerst. */
@@ -368,6 +381,7 @@ export async function costByMonth(months = 6): Promise<CostRow[]> {
     output: number;
     thinking: number;
     requests: number;
+    invalidReplies: number;
   }>(Collections.transcriptionRuns, [
     { $match: { kind: "transkription" } },
     {
@@ -384,6 +398,7 @@ export async function costByMonth(months = 6): Promise<CostRow[]> {
         output: { $sum: "$usage.output" },
         thinking: { $sum: "$usage.thinking" },
         requests: { $sum: "$usage.requests" },
+        invalidReplies: { $sum: { $ifNull: ["$invalidReplies", 0] } },
       },
     },
     { $sort: { "_id.month": -1, "_id.model": 1 } },
@@ -402,6 +417,7 @@ export async function costByMonth(months = 6): Promise<CostRow[]> {
       thinking: row.thinking,
       requests: row.requests,
     },
+    invalidReplies: row.invalidReplies,
   }));
 }
 

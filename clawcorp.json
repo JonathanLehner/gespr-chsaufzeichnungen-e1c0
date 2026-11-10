@@ -5,7 +5,7 @@
       "context": "transcriber",
       "cpus": 0.5,
       "memory": "512m",
-      "env": ["MONGODB_URI", "CLAWCORP_API_KEY"]
+      "env": ["MONGODB_URI", "CLAWCORP_API_KEY", "GEMINI_API_KEY"]
     }
   ]
 }

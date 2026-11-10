@@ -8,6 +8,11 @@
  *  - Das Modell je Auftrag, minimales Denken und das Vokabular gehen in die Anfrage.
  *  - „Neu ausrichten“ stellt keine Anfrage und vermerkt `retimedAt`.
  *  - Jeder Lauf landet in `transcription_runs`.
+ *  - Neue Uploads laufen mit dem Standardmodell gemini-3.5-flash-lite, die
+ *    Anfrage bindet die Antwort an `responseSchema`.
+ *  - Eine Antwort ohne gültiges JSON wird einmal wiederholt (keine Lücke) und
+ *    in `transcription_runs.invalidReplies` gezählt.
+ *  - Der abgelöste Text bleibt in `transcript_history_parts`.
  *
  *   TEST_MONGODB_URI="mongodb://localhost:27999/neu_check?directConnection=true" \
  *     npx tsx scripts/check-neu-transkription.mts
@@ -36,7 +41,7 @@ execFileSync("ffmpeg", [
 ]);
 const wavBytes = readFileSync(wav);
 
-const requests: { model: string; prompt: string; thinking: unknown; at: number }[] = [];
+const requests: { model: string; prompt: string; thinking: unknown; schema: boolean; at: number }[] = [];
 const server = createServer((req, res) => {
   if (req.url?.startsWith("/audio/")) {
     res.writeHead(200, { "content-type": "audio/wav" });
@@ -50,8 +55,11 @@ const server = createServer((req, res) => {
       model: parsed.model,
       prompt: parsed.contents[0].parts[0].text,
       thinking: parsed.generationConfig?.thinkingConfig,
+      schema: !!parsed.generationConfig?.responseSchema,
       at: Date.now(),
     });
+    // Die erste Antwort ist abgeschnittenes JSON: Der Abschnitt muss einmal wiederholt werden.
+    const invalid = requests.length === 1;
     const transcript = {
       speakers: [{ id: "S1", label: "Sprecher 1" }, { id: "S2", label: "Sprecher 2" }],
       segments: [
@@ -63,7 +71,7 @@ const server = createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
-          text: JSON.stringify(transcript),
+          text: invalid ? JSON.stringify(transcript).slice(0, 60) : JSON.stringify(transcript),
           response: {
             usageMetadata: {
               promptTokenCount: 2400,
@@ -82,7 +90,7 @@ const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 
 const client = await new MongoClient(uri).connect();
 const db = client.db();
-for (const name of ["jobs", "recordings", "transcript_parts", "transcript_index", "transcriber_workers", "transcriber_limiter", "settings", "transcription_runs"]) {
+for (const name of ["jobs", "recordings", "transcript_parts", "transcript_history_parts", "transcript_index", "transcriber_workers", "transcriber_limiter", "settings", "transcription_runs"]) {
   await db.collection(name).deleteMany({});
 }
 type Doc = { _id: string; [field: string]: unknown };
@@ -164,14 +172,23 @@ const parts = await db.collection<Doc>("transcript_parts").findOne({ recordingId
 if (JSON.stringify(parts?.segments).includes("Alter Text")) errors.push("Das neue Transkript wurde nicht gespeichert.");
 
 const lite = requests.filter((request) => request.model === "gemini-3.5-flash-lite");
-if (lite.length !== 2) errors.push(`${lite.length} Anfragen mit gemini-3.5-flash-lite statt 2.`);
+if (lite.length !== 5) errors.push(`${lite.length} Anfragen mit gemini-3.5-flash-lite statt 5 (4 Abschnitte, 1 Wiederholung).`);
+if (!requests.every((request) => request.schema)) errors.push("responseSchema fehlt in der Anfrage.");
 if (lite.some((request) => (request.thinking as { thinkingLevel?: string })?.thinkingLevel !== "minimal")) errors.push("Denken nicht auf minimal.");
 if (!requests.every((request) => request.prompt.includes("Immotrust AG") && request.prompt.includes("Valerio Labruzzo"))) {
   errors.push("Vokabular fehlt im Prompt.");
 }
-const upload = requests.filter((request) => request.model === "gemini-2.5-flash");
-if (upload.length !== 2) errors.push(`Upload: ${upload.length} Anfragen mit dem Standardmodell statt 2.`);
-if (requests.length !== 4) errors.push(`${requests.length} Anfragen statt 4 (Neu-Ausrichten fragt nie an).`);
+if (requests.some((request) => request.model === "gemini-2.5-flash")) errors.push("Anfrage mit dem abgelösten gemini-2.5-flash.");
+if (requests.length !== 5) errors.push(`${requests.length} Anfragen statt 5 (Neu-Ausrichten fragt nie an).`);
+const uploaded = await recordings.findOne({ _id: "rec_upload" });
+if ((uploaded?.transcript as { model?: string } | undefined)?.model !== "gemini-3.5-flash-lite") {
+  errors.push(`Upload mit ${(uploaded?.transcript as { model?: string } | undefined)?.model} statt dem Standard gemini-3.5-flash-lite.`);
+}
+if (uploaded?.transcriptionGaps) errors.push("Ungültige Antwort wurde als Lücke gespeichert.");
+const archived = await db.collection<Doc>("transcript_history_parts").find({ recordingId: "rec_neu_transkribieren" }).toArray();
+if (archived.length !== 1 || !JSON.stringify(archived[0].segments).includes("Alter Text.")) {
+  errors.push(`Abgelöster Text nicht aufbewahrt (${archived.length} Teile).`);
+}
 
 const retimed = await recordings.findOne({ _id: "rec_neu_ausrichten" });
 if (!(retimed?.transcript as { retimedAt?: string } | undefined)?.retimedAt) errors.push("Neu-Ausrichtung ohne retimedAt.");
@@ -179,6 +196,8 @@ if (retimed?.transcriptionStatus !== "abgeschlossen") errors.push(`Neu-Ausrichtu
 
 const runs = await db.collection<Doc>("transcription_runs").find({}).toArray();
 if (runs.length !== 2) errors.push(`${runs.length} Läufe in transcription_runs statt 2.`);
+const invalidCount = runs.reduce((sum, run) => sum + ((run.invalidReplies as number | undefined) ?? 0), 0);
+if (invalidCount !== 1) errors.push(`${invalidCount} ungültige Antworten gezählt statt 1.`);
 
 const worker = await db.collection<Doc>("transcriber_workers").findOne({});
 if (!(worker?.features as string[] | undefined)?.includes("nachrangig")) errors.push("Dienst meldet seine Fähigkeiten nicht.");

@@ -35,8 +35,10 @@ export type TranscriptionModel = {
   perMinute: { audioInput: number; textInput: number; output: number };
   /** Zusatz für `generationConfig`: Denken aus oder auf das Minimum (wird als Ausgabe berechnet). */
   generationConfig: Record<string, unknown>;
-  /** Kann derzeit über den Plattform-Endpunkt genutzt werden. */
+  /** Kann derzeit genutzt werden (bei `direct` nur mit `GEMINI_API_KEY`, siehe `isAvailable`). */
   available: boolean;
+  /** `direkt`: Googles Gemini API mit eigenem Schlüssel; `plattform`: ClawCorp-Endpunkt `/gemini`. */
+  route: "direkt" | "plattform";
   /** Kurzer Hinweis im Dashboard, wenn nicht verfügbar oder bald umgeleitet. */
   note: string | null;
 };
@@ -47,13 +49,14 @@ export const TRANSCRIPTION_MODELS: readonly TranscriptionModel[] = [
     path: "transkription",
     timing: "modell",
     price: { audioInput: 2.0, textInput: 2.0, output: 12.0 },
-    perMinute: { audioInput: 1500, textInput: 0, output: 190 },
+    // Gemessen am 10.11.2026 (11 Gespräche, ganze Datei, Wortzeiten + Sprecher).
+    perMinute: { audioInput: 1500, textInput: 0, output: 150 },
     generationConfig: {},
-    // Wortzeiten, Sprecher und Vokabular gibt es nur über die Interactions-API
-    // (`transcription_config`). Der Plattform-Endpunkt `/gemini` leitet nur
-    // `generateContent` weiter; dort liefert das Modell reinen Text.
-    available: false,
-    note: "Nicht verfügbar: Wortzeiten und Sprecher werden vom Plattform-Endpunkt noch nicht unterstützt.",
+    // Files API und Interactions-API (`transcription_config`) direkt bei Google;
+    // der Plattform-Endpunkt leitet nur `generateContent` weiter.
+    available: true,
+    route: "direkt",
+    note: "Liess im Test vom 10.11.2026 rund 40 % der Wörter aus, vor allem schweizerdeutsche Passagen.",
   },
   {
     id: "gemini-3.5-flash-lite",
@@ -63,6 +66,7 @@ export const TRANSCRIPTION_MODELS: readonly TranscriptionModel[] = [
     perMinute: { audioInput: 1500, textInput: 1330, output: 870 },
     generationConfig: { thinkingConfig: { thinkingLevel: "minimal" } },
     available: true,
+    route: "plattform",
     note: null,
   },
   {
@@ -73,6 +77,7 @@ export const TRANSCRIPTION_MODELS: readonly TranscriptionModel[] = [
     perMinute: { audioInput: 1920, textInput: 1180, output: 1400 },
     generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
     available: false,
+    route: "plattform",
     note: "Nicht verfügbar: Google nimmt für dieses Konto keine Anfragen mehr an.",
   },
   {
@@ -82,30 +87,41 @@ export const TRANSCRIPTION_MODELS: readonly TranscriptionModel[] = [
     price: { audioInput: 1.0, textInput: 0.3, output: 2.5 },
     perMinute: { audioInput: 1920, textInput: 1180, output: 1400 },
     generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
-    available: true,
-    note: "Google leitet dieses Modell ab 1.12.2026 auf gemini-3.5-flash-lite um.",
+    // Abgelöst am 10.11.2026; bleibt nur als Bezeichnung früherer Transkripte.
+    available: false,
+    route: "plattform",
+    note: "Abgelöst: Google leitet dieses Modell ab 1.12.2026 auf gemini-3.5-flash-lite um.",
   },
 ];
 
-/** Gewünschter Standard, sobald verfügbar. */
-export const DEFAULT_MODEL: TranscriptionModelId = "gemini-3.5-transcribe";
-/** Bisheriges Modell; damit sind alle Transkripte vor der Modellauswahl entstanden. */
+/**
+ * Standard für neue Transkripte. gemini-3.5-transcribe hat die Prüfung vom
+ * 10.11.2026 nicht bestanden (siehe `docs/vergleich-transkription-2026-11-10.md`).
+ */
+export const DEFAULT_MODEL: TranscriptionModelId = "gemini-3.5-flash-lite";
+/** Bisheriges Modell; damit sind alle Transkripte vor der Modellauswahl entstanden. Nur noch Bezeichnung. */
 export const LEGACY_MODEL: TranscriptionModelId = "gemini-2.5-flash";
 
 export function findModel(id: string | null | undefined): TranscriptionModel | null {
   return TRANSCRIPTION_MODELS.find((model) => model.id === id) ?? null;
 }
 
-/**
- * Tatsächlich verwendetes Modell: das gewählte, wenn verfügbar, sonst der
- * Standard, sonst das bisherige Modell.
- */
-export function resolveModel(id: string | null | undefined): TranscriptionModel {
+/** Nutzbar? Modelle mit `route: "direkt"` brauchen den eigenen Schlüssel (`GEMINI_API_KEY`). */
+export function isAvailable(model: TranscriptionModel, directKey: boolean): boolean {
+  return model.available && (model.route !== "direkt" || directKey);
+}
+
+/** Hinweis im Dashboard; ohne Schlüssel bei direkten Modellen „nicht eingerichtet“. */
+export function availabilityNote(model: TranscriptionModel, directKey: boolean): string | null {
+  if (model.available && model.route === "direkt" && !directKey) return "Nicht verfügbar: Zugang zur Gemini API ist nicht eingerichtet.";
+  return model.note;
+}
+
+/** Tatsächlich verwendetes Modell: das gewählte, wenn nutzbar, sonst der Standard. */
+export function resolveModel(id: string | null | undefined, directKey = false): TranscriptionModel {
   const chosen = findModel(id);
-  if (chosen?.available) return chosen;
-  const fallback = findModel(DEFAULT_MODEL);
-  if (fallback?.available) return fallback;
-  return findModel(LEGACY_MODEL)!;
+  if (chosen && isAvailable(chosen, directKey)) return chosen;
+  return findModel(DEFAULT_MODEL)!;
 }
 
 /** Tokens einer oder mehrerer Anfragen, aufgeschlüsselt wie in `usageMetadata`. */
@@ -138,6 +154,29 @@ export function usageFromMetadata(meta: UsageMetadata | null | undefined): Token
     textInput: Math.max(0, prompt - audio),
     output: meta.candidatesTokenCount ?? 0,
     thinking: meta.thoughtsTokenCount ?? 0,
+    requests: 1,
+  };
+}
+
+type InteractionUsage = {
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_thought_tokens?: number;
+  input_tokens_by_modality?: { modality?: string; tokens?: number }[];
+};
+
+/** Liest `usage` einer Antwort der Interactions-API. */
+export function usageFromInteraction(usage: InteractionUsage | null | undefined): TokenUsage {
+  if (!usage) return { ...EMPTY_USAGE, requests: 1 };
+  const input = usage.total_input_tokens ?? 0;
+  const audio = (usage.input_tokens_by_modality ?? [])
+    .filter((entry) => entry.modality?.toLowerCase() === "audio")
+    .reduce((sum, entry) => sum + (entry.tokens ?? 0), 0);
+  return {
+    audioInput: audio,
+    textInput: Math.max(0, input - audio),
+    output: usage.total_output_tokens ?? 0,
+    thinking: usage.total_thought_tokens ?? 0,
     requests: 1,
   };
 }

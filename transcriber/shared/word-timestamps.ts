@@ -8,8 +8,8 @@
  *     { type: "word_info", text: "Hallo", speaker: "spk_1",
  *       start_offset: "0.100s", end_offset: "0.400s" }, … ] }
  *
- * Reine Funktion ohne Laufzeitabhängigkeiten; noch nicht im Dienst verdrahtet,
- * weil der Plattform-Endpunkt die Interactions-API nicht weiterleitet.
+ * Reine Funktion ohne Laufzeitabhängigkeiten; genutzt vom direkten Weg im
+ * Transkriptionsdienst (`requestDirectTranscript` in `transcriber/worker.ts`).
  */
 import type { TranscriptSegment, TranscriptSentence, TranscriptWord } from "./types";
 

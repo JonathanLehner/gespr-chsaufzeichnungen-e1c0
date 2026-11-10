@@ -23,7 +23,7 @@ export const WORKERS_COLLECTION = "transcriber_workers";
  * ein Dienst mit diesen Einträgen; eine ältere Instanz würde solche Aufträge
  * wie gewöhnliche behandeln.
  */
-export const REQUIRED_WORKER_FEATURES = ["nachrangig", "modell-je-auftrag", "neu-ausrichten"] as const;
+export const REQUIRED_WORKER_FEATURES = ["nachrangig", "modell-je-auftrag", "neu-ausrichten", "gemini-direkt"] as const;
 
 export const iso = (ms = Date.now()) => new Date(ms).toISOString();
 
@@ -235,7 +235,12 @@ export const RECENT_ERRORS = 50;
 
 /** Meldung des Dienstes, wenn das monatliche Kostenlimit des Kontos erreicht ist. */
 export function isSpendingLimitError(message: string): boolean {
-  return /spending limit/i.test(message);
+  // Plattform: „monthly spending limit“. Google direkt: Ausgabenobergrenze des
+  // Projekts, aufgebrauchtes Guthaben oder Kontingent ohne Abrechnung. Die
+  // Minutengrenze („Rate limit exceeded … per minute“) ist keine Sperre.
+  return /spending (limit|cap)|check your plan and billing|billing (account|details|is not enabled)|credits? (are |is )?(depleted|exhausted)|prepa(id|yment) (balance|credits?)/i.test(
+    message,
+  );
 }
 
 /** Erster Tag des Folgemonats, 00:00 Uhr in Europe/Zurich, als UTC-Zeitpunkt. */

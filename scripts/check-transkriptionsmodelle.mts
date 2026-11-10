@@ -8,29 +8,109 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { claimJob } from "../transcriber/claim";
+import { boundsAtPauses, fixedBounds } from "../transcriber/shared/chunk-bounds";
+import { isSpendingLimitError } from "../transcriber/shared/queue";
+import { correctVocabulary, foldForMatch } from "../transcriber/shared/vocabulary-correction";
 import {
+  DEFAULT_MODEL,
   LEGACY_MODEL,
   TRANSCRIPTION_MODELS,
   addUsage,
+  availabilityNote,
   callerVocabulary,
   costUsd,
   estimatedCostPerMinute,
   findModel,
+  isAvailable,
   normalizeVocabulary,
   resolveModel,
+  usageFromInteraction,
   usageFromMetadata,
   vocabularyPrompt,
 } from "../transcriber/shared/models";
 import { offsetToMs, segmentsFromWords } from "../transcriber/shared/word-timestamps";
 
-test("nicht verfügbare Modelle fallen auf ein verfügbares zurück", () => {
-  assert.equal(resolveModel("gemini-3.5-flash-lite").id, "gemini-3.5-flash-lite");
-  const fallback = resolveModel("gemini-3.5-transcribe");
-  assert.ok(fallback.available);
-  assert.equal(resolveModel(null).id, fallback.id);
-  assert.equal(resolveModel("gibt-es-nicht").id, fallback.id);
-  assert.equal(resolveModel("gemini-2.5-flash-lite").available, true);
-  assert.equal(findModel(LEGACY_MODEL)?.available, true);
+test("Standard ist gemini-3.5-flash-lite; gemini-2.5-flash ist abgelöst und fällt darauf zurück", () => {
+  assert.equal(DEFAULT_MODEL, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel(null).id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel("gibt-es-nicht").id, "gemini-3.5-flash-lite");
+  assert.equal(findModel(LEGACY_MODEL)?.available, false);
+  assert.equal(resolveModel(LEGACY_MODEL, true).id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel("gemini-2.5-flash-lite", true).id, "gemini-3.5-flash-lite");
+});
+
+test("gemini-3.5-transcribe nur mit eigenem Schlüssel", () => {
+  const transcribe = findModel("gemini-3.5-transcribe")!;
+  assert.equal(transcribe.route, "direkt");
+  assert.equal(isAvailable(transcribe, false), false);
+  assert.equal(isAvailable(transcribe, true), true);
+  assert.equal(resolveModel("gemini-3.5-transcribe", false).id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel("gemini-3.5-transcribe", true).id, "gemini-3.5-transcribe");
+  assert.match(availabilityNote(transcribe, false) ?? "", /nicht eingerichtet/);
+  assert.equal(isAvailable(findModel("gemini-3.5-flash-lite")!, false), true);
+});
+
+test("usage der Interactions-API: Audio, Text, Ausgabe", () => {
+  const usage = usageFromInteraction({
+    total_input_tokens: 2318,
+    total_output_tokens: 61,
+    total_thought_tokens: 0,
+    input_tokens_by_modality: [{ modality: "text", tokens: 1 }, { modality: "audio", tokens: 2317 }],
+  });
+  assert.deepEqual(usage, { audioInput: 2317, textInput: 1, output: 61, thinking: 0, requests: 1 });
+  assert.equal(usageFromInteraction(undefined).requests, 1);
+});
+
+test("Kostenlimit: Plattform und Google direkt sperren, Minutengrenze nicht", () => {
+  assert.ok(isSpendingLimitError("Gemini error: You have exceeded your monthly spending limit"));
+  assert.ok(isSpendingLimitError("429 You exceeded your current quota, please check your plan and billing details."));
+  assert.ok(isSpendingLimitError("Your project has exceeded its monthly spending cap."));
+  assert.ok(isSpendingLimitError("Your prepayment credits are depleted."));
+  assert.ok(!isSpendingLimitError("429 Rate limit exceeded for model gemini-3.5-transcribe (limit: 10000 input tokens per minute on Tier 1)."));
+  assert.ok(!isSpendingLimitError("503 The model is overloaded."));
+});
+
+test("Abschnitte: feste Minute; gemini-3.5-transcribe schneidet in der längsten Pause", () => {
+  assert.deepEqual(fixedBounds(150_000, 60_000), [
+    { startMs: 0, endMs: 60_000 },
+    { startMs: 60_000, endMs: 120_000 },
+    { startMs: 120_000, endMs: 150_000 },
+  ]);
+  assert.deepEqual(boundsAtPauses(200_000, 300_000, null), [{ startMs: 0, endMs: 200_000 }]);
+  const speech = [
+    { startMs: 0, endMs: 230_000 },
+    { startMs: 231_000, endMs: 260_000 },
+    { startMs: 264_000, endMs: 400_000 },
+    { startMs: 401_000, endMs: 700_000 },
+  ];
+  const bounds = boundsAtPauses(700_000, 300_000, speech);
+  assert.equal(bounds[0].endMs, 262_000);
+  assert.equal(bounds[bounds.length - 1].endMs, 700_000);
+  for (let index = 0; index < bounds.length; index += 1) {
+    assert.ok(bounds[index].endMs - bounds[index].startMs <= 300_000);
+    if (index > 0) assert.equal(bounds[index].startMs, bounds[index - 1].endMs);
+  }
+  // Ohne Pause: harter Schnitt an der Grenze.
+  assert.deepEqual(boundsAtPauses(400_000, 300_000, []).map((entry) => entry.endMs), [300_000, 400_000]);
+});
+
+test("Vokabular-Nachkorrektur: Namen angeglichen, Zeiten unverändert, gewöhnliche Wörter bleiben", () => {
+  const words = [
+    { type: "word_info", text: "La", speaker: "spk:0", start_offset: "1.000s", end_offset: "1.200s" },
+    { type: "word_info", text: "Brusso", speaker: "spk:0", start_offset: "1.200s", end_offset: "1.700s" },
+    { type: "word_info", text: "von", speaker: "spk:0", start_offset: "1.700s", end_offset: "1.900s" },
+    { type: "word_info", text: "ImmoTrust.", speaker: "spk:0", start_offset: "1.900s", end_offset: "2.500s" },
+    { type: "word_info", text: "Grundbuchs", speaker: "spk:1", start_offset: "3.000s", end_offset: "3.500s" },
+    { type: "word_info", text: "Hauptstraße,", speaker: "spk:1", start_offset: "3.500s", end_offset: "4.000s" },
+    { type: "word_info", text: "Basen", speaker: "spk:1", start_offset: "4.000s", end_offset: "4.400s" },
+  ];
+  const { words: out, corrections } = correctVocabulary(words, ["Immotrust AG", "Valerio Labruzzo", "Grundbuch", "Hauptstrasse", "Basel"]);
+  assert.deepEqual(out.map((word) => word.text), ["Labruzzo", "von", "Immotrust.", "Grundbuchs", "Hauptstrasse,", "Basen"]);
+  assert.equal(corrections, 3);
+  assert.equal(out[0].start_offset, "1.000s");
+  assert.equal(out[0].end_offset, "1.700s");
+  assert.equal(out[2].start_offset, "1.900s");
+  assert.equal(foldForMatch("Labruzzo"), foldForMatch("La Brusso"));
 });
 
 test("Flash-Modelle denken nicht oder nur minimal", () => {
@@ -64,8 +144,8 @@ test("geschätzte Kosten je Minute liegen im erwarteten Bereich", () => {
     const perMinute = estimatedCostPerMinute(model);
     assert.ok(perMinute > 0.0005 && perMinute < 0.02, `${model.id}: ${perMinute}`);
   }
-  // Laut Preisliste rund $0.005 je Minute.
-  assert.ok(Math.abs(estimatedCostPerMinute(findModel("gemini-3.5-transcribe")!) - 0.0053) < 0.001);
+  // Gemessen am 10.11.2026: rund $0.0045 je Minute.
+  assert.ok(Math.abs(estimatedCostPerMinute(findModel("gemini-3.5-transcribe")!) - 0.0048) < 0.001);
 });
 
 test("Vokabular: bereinigt, ohne Doppelte, Anrufer ohne Kürzel", () => {

@@ -31,6 +31,7 @@ import {
   TRANSCRIPT_SORTS,
   actualCostPerMinute,
   costByMonth,
+  directKeyConfigured,
   getModelSettings,
   listTranscripts,
   type TranscriptSort,
@@ -38,8 +39,10 @@ import {
 import {
   TIMING_LABELS,
   TRANSCRIPTION_MODELS,
+  availabilityNote,
   estimatedCostPerMinute,
   formatUsd,
+  isAvailable,
   type TimingMethod,
 } from "../../../../../transcriber/shared/models";
 import {
@@ -122,10 +125,11 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
     costByMonth(),
     listTranscripts({ model: filterModel, timing: filterTiming, sort, direction, page }),
   ]);
+  const directKey = directKeyConfigured();
   const modelOptions: ModelOption[] = TRANSCRIPTION_MODELS.map((model) => ({
     id: model.id,
-    available: model.available,
-    note: model.note,
+    available: isAvailable(model, directKey),
+    note: availabilityNote(model, directKey),
     timingLabel: TIMING_LABELS[model.timing],
     estimatedPerMinute: formatUsd(estimatedCostPerMinute(model)),
     actualPerMinute: actual.has(model.id) ? formatUsd(actual.get(model.id)) : null,
@@ -408,7 +412,7 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
           <p className="mt-2 text-[13px] text-ink-soft">Noch keine gemessenen Läufe.</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse">
+            <table className="w-full min-w-[800px] border-collapse">
               <thead className="bg-canvas">
                 <tr>
                   <th className="th">Monat</th>
@@ -418,6 +422,7 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
                   <th className="th">Tokens Ein / Aus / Denken</th>
                   <th className="th">Kosten</th>
                   <th className="th">Je Minute</th>
+                  <th className="th">Ungültige Antworten</th>
                 </tr>
               </thead>
               <tbody>
@@ -435,6 +440,7 @@ export default async function TranskriptionAdminPage({ searchParams }: { searchP
                     <td className="td tabular-nums">
                       {row.audioMinutes > 0 ? formatUsd(row.costUsd / row.audioMinutes) : "–"}
                     </td>
+                    <td className="td tabular-nums">{row.invalidReplies.toLocaleString("de-CH")}</td>
                   </tr>
                 ))}
               </tbody>

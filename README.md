@@ -71,6 +71,10 @@ CLAWCORP_API_KEY=...   # ClawCorp-Plattform: Gemini (Transkription)
 AUTH_SECRET=...        # Signaturschlüssel für Wiedergabe-Tokens
 ```
 
+Optional: `GEMINI_API_KEY` (eigener Zugang zur Gemini API). Nur damit ist `gemini-3.5-transcribe`
+im Dashboard wählbar; der Transkriptionsdienst nutzt ihn für dieses Modell, die Anwendung prüft nur,
+ob er gesetzt ist.
+
 `AUTH_SECRET` hat keinen Standardwert. Fehlt die Variable, bricht das Signieren und Prüfen von
 Wiedergabe-Links mit einem Fehler ab. Einen Wert erzeugen: `openssl rand -base64 32`.
 
@@ -216,7 +220,7 @@ npx wrangler dev --port 8788        # Worker lokal prüfen (Variablen aus .dev.v
 npx wrangler deploy                 # Ausliefern
 ```
 
-`MONGODB_URI`, `CLAWCORP_API_KEY` und `AUTH_SECRET` liegen als Worker-Secrets (`npx wrangler secret put NAME`),
+`MONGODB_URI`, `CLAWCORP_API_KEY`, `GEMINI_API_KEY` und `AUTH_SECRET` liegen als Worker-Secrets (`npx wrangler secret put NAME`),
 lokal in `.dev.vars`. Für den E-Mail-Versand kommt `MAIL_API_KEY` auf demselben Weg dazu, sofern der
 Schlüssel nicht im Admin-Dashboard hinterlegt wird.
 
@@ -232,7 +236,8 @@ Dienst bearbeitet also beide.
 | Variable | Pflicht | Zweck |
 | --- | --- | --- |
 | `MONGODB_URI` | ja | Datenbank mit `jobs`, `recordings`, Transkripten |
-| `CLAWCORP_API_KEY` | ja | Gemini über die Plattform |
+| `CLAWCORP_API_KEY` | ja | Gemini über die Plattform (Flash-Modelle) |
+| `GEMINI_API_KEY` | nein | Gemini API direkt, nötig für `gemini-3.5-transcribe`; wird nie protokolliert |
 | `TRANSCRIBER_CONCURRENCY` | nein | gleichzeitig bearbeitete Aufträge je Instanz, Standard 2, höchstens 8 (im Dashboard gespeicherte Werte gehen vor) |
 | `TRANSCRIBER_GEMINI_CONCURRENCY` | nein | gleichzeitige Anfragen an Gemini über **alle** Instanzen, Standard 2 (Dashboard geht vor) |
 | `TRANSCRIBER_GEMINI_GAP_MS` | nein | Mindestabstand zwischen zwei Anfragestarts über alle Instanzen, Standard 4000 (Dashboard geht vor) |
@@ -267,7 +272,10 @@ Dienst bearbeitet also beide.
   behebt: Audiodatei fehlt (404/410), ist leer oder lässt sich nicht dekodieren, Aufnahme gelöscht.
   Die Meldung nennt die genaue Ursache. Beim Start reiht der Dienst ältere, wegen vorübergehender
   Fehler beendete Aufträge wieder ein. „Erneut starten“ setzt den Auftrag auf `wartend` zurück.
-- **Kostenlimit-Sperre**: Meldet Gemini „monthly spending limit“ (als 502 von `/gemini`), setzt
+- **Kostenlimit-Sperre**: Meldet Gemini „monthly spending limit“ (als 502 von `/gemini`) oder
+  Google direkt eine Ausgabenobergrenze, aufgebrauchtes Guthaben oder ein Kontingent mit Verweis auf
+  die Abrechnung („check your plan and billing details“, `isSpendingLimitError` in
+  `transcriber/shared/queue.ts`; die Minutengrenze „Rate limit exceeded“ zählt nicht dazu), setzt
   der Dienst `spendingBlock` im Dokument der Drossel (Grund, Beginn, Ende, auslösende Aufnahme).
   Ab dann vergibt die Drossel keinem Platz einer Instanz mehr eine Anfrage; laufende Aufträge
   gehen mit gesichertem Zwischenstand zurück auf `wartend`, ohne dass ein Versuch zählt und ohne
@@ -303,24 +311,30 @@ Dienst bearbeitet also beide.
   Admin-Dashboard zeigt Instanzen, letztes Lebenszeichen, Warteschlange und Erledigtes der letzten
   Stunde.
 - **Transkriptionsmodell** (`settings/transcription_settings`, Dashboard „Transkriptionsmodell“,
-  ohne Neudeploy): `gemini-3.5-transcribe` (gewünschter Standard), `gemini-3.5-flash-lite`,
-  `gemini-2.5-flash-lite`, `gemini-2.5-flash`. Katalog, Preise und Kostenrechnung in
-  `transcriber/shared/models.ts`. Die Flash-Modelle laufen über den Prompt (60-s-Abschnitte) mit
-  Forced Alignment und ohne bzw. mit minimalem Denken (`thinkingBudget: 0`, bei 3.5
-  `thinkingLevel: "minimal"`). Nicht verfügbare Modelle sind im Dashboard gesperrt; der Dienst fällt
-  dann auf `gemini-2.5-flash` zurück:
-  - `gemini-3.5-transcribe`: Wortzeiten, Sprecher und Vokabular gibt es nur über Googles
-    Interactions-API (`POST /v1beta/interactions`, `generation_config.transcription_config.mode`
-    mit `diarization_mode` und `timestamp_granularities`). Der Plattform-Endpunkt `/gemini` leitet
-    nur `generateContent` weiter (`model`, `contents`, `generationConfig`; andere Felder werden
-    verworfen, `input` wird abgelehnt, `transcriptionConfig` lehnt Google in `generationConfig` ab).
-    Dort liefert das Modell nur Text (`parts[].audioTranscription.text`). Es fehlen: eine
-    Weiterleitung der Interactions-API samt `transcription_config` und Files-API-Upload (Audio
-    über 200 KB). Die Umsetzung der Wortannotationen liegt bereit
-    (`transcriber/shared/word-timestamps.ts`). Laut Google sind `custom_vocabulary` und
-    Wortzeiten/Sprecher nicht kombinierbar, und mit Wortzeiten gilt eine Grenze von 30 min je
-    Anfrage: Längere Gespräche (bis 41 min) brauchen also weiterhin Abschnitte.
-  - `gemini-2.5-flash-lite`: Google antwortet „no longer available to new users“.
+  ohne Neudeploy): Standard ist `gemini-3.5-flash-lite`. Wählbar sind ausserdem
+  `gemini-3.5-transcribe` (nur mit `GEMINI_API_KEY`); `gemini-2.5-flash` ist seit 10.11.2026
+  abgelöst (Google leitet es ab 1.12.2026 um) und bleibt nur Bezeichnung älterer Transkripte,
+  `gemini-2.5-flash-lite` nimmt Google nicht mehr an. Ein nicht nutzbares Modell (gespeichert oder am
+  Auftrag) fällt auf den Standard zurück. Katalog, Preise und Kostenrechnung in
+  `transcriber/shared/models.ts`, Entscheidung in `docs/pruefung-gemini-3.5-transcribe-2026-11-10.md`.
+  - Flash-Modelle: über `/gemini`, 60-s-Abschnitte, Prompt mit Vokabular, minimales Denken, Antwort an
+    `responseSchema` gebunden (`TRANSCRIPT_RESPONSE_SCHEMA` in `transcriber/shared/transcript.ts`),
+    Zeiten per Forced Alignment. Liefert das Modell trotzdem kein gültiges JSON, wird der Abschnitt
+    einmal wiederholt; scheitert auch das, bleibt der Abschnitt offen und der Auftrag wird
+    zurückgestellt statt mit Lücke gespeichert. Jede ungültige Antwort zählt in
+    `transcription_runs.invalidReplies` (Dashboard „Kosten“, Spalte „Ungültige Antworten“).
+  - `gemini-3.5-transcribe`: direkt bei Google mit `@google/genai`. Abschnitte von höchstens 5
+    Minuten, in der längsten Pause geschnitten (`transcriber/shared/chunk-bounds.ts`): Google erlaubt
+    mit Wortzeiten 30 min je Anfrage, Stufe 1 aber nur 10 000 Eingabe-Tokens je Minute (rund 6,5
+    Audiominuten). Upload über die Files API, Transkription über die Interactions-API
+    (`transcription_config.mode`: `verbatim`, `diarization_mode: "speaker"`,
+    `timestamp_granularities: ["word"]`), danach wird die Datei gelöscht. `custom_vocabulary` lehnt
+    Google zusammen mit Wortzeiten ab; das Vokabular wird stattdessen nachträglich auf die Wörter
+    angewendet (`transcriber/shared/vocabulary-correction.ts`, lautnaher Abgleich, Zeiten bleiben).
+    Wortzeiten und Sprecher übernimmt `transcriber/shared/word-timestamps.ts` (`timing: "modell"`,
+    kein Forced Alignment). Fehler von Google: 400/413/415/422 betreffen den Abschnitt, alles andere
+    (auch 401/403/404/429) stellt den Auftrag zurück. Die SDK-Wiederholungen sind aus, das übernimmt
+    die Drossel.
 - **Vokabular** (gleiches Dokument, Dashboard „Vokabular“): Liste von Namen und Begriffen für den
   Prompt der Flash-Modelle. Ohne gespeicherte Liste gilt die Vorbelegung (Immotrust, Immotrust AG,
   Schweizer Orte und Strassen, Immobilienbegriffe) plus die Namen aller Anrufer der Aufnahmen.
@@ -337,7 +351,8 @@ Dienst bearbeitet also beide.
 - **Herkunft und Kosten**: Nach jedem Lauf schreibt der Dienst `recordings.transcript` (Modell,
   `modelVersion`, Zeitstempel-Methode `modell`/`schaetzung`, Datum, Tokens aus `usageMetadata`
   inklusive Denken, Kosten in USD) und hängt die abgelöste Fassung an `transcriptHistory` (höchstens
-  20). Zusätzlich je Lauf ein Eintrag in `transcription_runs` (Dashboard „Kosten“ je Monat und
+  20). Der Text samt Zeiten des abgelösten Transkripts bleibt in `transcript_history_parts`
+  (`_id` = `<Teil>@<Zeitpunkt der alten Fassung>`, `replacedAt`). Zusätzlich je Lauf ein Eintrag in `transcription_runs` (Dashboard „Kosten“ je Monat und
   Modell, tatsächliche Kosten je Minute). Die Detailseite zeigt Modell, Wortzeiten und Datum, Admins
   zusätzlich Tokens und Kosten. `scripts/backfill-transcript-meta.mts` trägt für ältere Transkripte
   `gemini-2.5-flash` mit „Schätzung“ nach (mehrfach ausführbar; nach dem Produktions-Deploy einmal
@@ -353,12 +368,13 @@ TEST_MONGODB_URI=... npx tsx scripts/check-legacy-reclaim.mts     # verwaiste Au
 TEST_MONGODB_URI=... npx tsx scripts/check-gemini-limiter.mts
 TEST_MONGODB_URI=... npx tsx scripts/check-transcriber-retry.mts   # rund 4 min, zwei Instanzen gegen nachgebildeten Dienst
 TEST_MONGODB_URI=... npx tsx scripts/check-spending-block.mts      # rund 2 min: Kostenlimit-Sperre, Freigabe, Monatswechsel, Pause, Nach vorne, Grenzen
-TEST_MONGODB_URI=... npx tsx scripts/check-neu-transkription.mts   # Vorrang neuer Uploads, Modell je Auftrag, Tokens/Kosten, Historie, Neu-Ausrichten
+TEST_MONGODB_URI=... npx tsx scripts/check-neu-transkription.mts   # Vorrang neuer Uploads, Modell je Auftrag, Tokens/Kosten, Historie, Neu-Ausrichten, ungültiges JSON
+TEST_MONGODB_URI=... GEMINI_API_KEY=... AUDIO_URL=... npx tsx scripts/check-gemini-direkt.mts   # echte Gemini API, rund $0.005/min
 ```
 
 ```bash
 docker build -t transcriber transcriber
-docker run --rm -e MONGODB_URI=... -e CLAWCORP_API_KEY=... transcriber
+docker run --rm -e MONGODB_URI=... -e CLAWCORP_API_KEY=... -e GEMINI_API_KEY=... transcriber
 ```
 
 Die reine Logik in `transcriber/shared/` (Prompt, Auswertung, Zerlegung, Ausrichtung,

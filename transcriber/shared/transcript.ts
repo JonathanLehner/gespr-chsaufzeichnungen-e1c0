@@ -56,6 +56,42 @@ Diese Audiodatei ist Abschnitt ${index + 1} von ${count} eines längeren Gesprä
 - Verwende für dieselbe Person durchgehend dieselbe Bezeichnung.`;
 }
 
+/**
+ * Struktur der Antwort für `generationConfig.responseSchema` (OpenAPI-Teilmenge
+ * der Gemini API). Sie bindet das Modell an gültiges JSON in genau der Form,
+ * die der Prompt beschreibt.
+ */
+export const TRANSCRIPT_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  required: ["speakers", "segments"],
+  properties: {
+    speakers: {
+      type: "ARRAY",
+      items: { type: "OBJECT", required: ["id", "label"], properties: { id: { type: "STRING" }, label: { type: "STRING" } } },
+    },
+    segments: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        required: ["speaker", "startMs", "endMs", "sentences"],
+        properties: {
+          speaker: { type: "STRING" },
+          startMs: { type: "INTEGER" },
+          endMs: { type: "INTEGER" },
+          sentences: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              required: ["text", "startMs", "endMs"],
+              properties: { text: { type: "STRING" }, startMs: { type: "INTEGER" }, endMs: { type: "INTEGER" } },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 type RawWord = { text?: string; startMs?: number; endMs?: number };
 type RawSentence = { text?: string; startMs?: number; endMs?: number; words?: RawWord[] };
 type RawSegment = { speaker?: string; startMs?: number; endMs?: number; sentences?: RawSentence[] };
