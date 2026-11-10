@@ -159,7 +159,7 @@ function TranscriptPlaceholder({
           lässt sich weiterhin abspielen.
         </p>
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-bad">
-          {retryHint(nextAttemptLabel)}
+          {retryHint()}
         </p>
 
         <div className="mt-3">
@@ -196,6 +196,14 @@ function TranscriptPlaceholder({
         aktualisiert sich automatisch, sobald es verfügbar ist. Die Aufnahme kann bereits jetzt
         angehört werden.
       </p>
+      {status === "wartend" && errorMessage && (
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-petrol">
+          Letzter Versuch nicht gelungen: {describeTranscriptionError(errorMessage).message}{" "}
+          {nextAttemptLabel
+            ? `Nächster automatischer Versuch am ${nextAttemptLabel} Uhr.`
+            : "Der nächste Versuch folgt automatisch."}
+        </p>
+      )}
       <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/70">
         <div className="h-full w-1/3 animate-pulse rounded-full bg-petrol" />
       </div>

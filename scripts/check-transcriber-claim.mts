@@ -2,7 +2,8 @@
  * Prüft, dass die Übernahme eines Auftrags exklusiv ist: Zwei Clients
  * (wie Staging und Produktion) übernehmen gleichzeitig 400-mal aus 100
  * Aufträgen (wartend, verwaist, fällige Wiederholung). Jeder Auftrag darf
- * genau einmal übernommen werden.
+ * genau einmal übernommen werden. Endgültig fehlgeschlagene Aufträge und
+ * Wiederholungen, die erst später fällig sind, dürfen nie übernommen werden.
  *
  *   TEST_MONGODB_URI="mongodb://localhost:27017/claim_race" npx tsx scripts/check-transcriber-claim.mts
  *
@@ -19,8 +20,8 @@ if (!uri) {
 }
 
 const [a, b] = await Promise.all([new MongoClient(uri).connect(), new MongoClient(uri).connect()]);
-const ja = a.db().collection<{ _id: string }>("jobs");
-const jb = b.db().collection<{ _id: string }>("jobs");
+const ja = a.db().collection<{ _id: string; [field: string]: unknown }>("jobs");
+const jb = b.db().collection<{ _id: string; [field: string]: unknown }>("jobs");
 await ja.deleteMany({});
 await ja.insertMany(
   Array.from({ length: 100 }, (_, i) => ({
@@ -30,9 +31,14 @@ await ja.insertMany(
       ? { status: "in_arbeit", lockedAt: "2026-11-02T09:25:00Z", attempts: 1 }
       : i % 3 === 1
         ? { status: "wartend", lockedAt: null, attempts: 0 }
-        : { status: "fehlgeschlagen", attempts: 1, nextAttemptAt: "2026-11-05T00:00:00Z" }),
+        : { status: "wartend", attempts: 7, nextAttemptAt: "2026-11-05T00:00:00Z" }),
   })),
 );
+// Nicht übernehmbar: endgültig fehlgeschlagen, Wiederholung erst in einer Stunde.
+await ja.insertMany([
+  { _id: "endgueltig", createdAt: iso(), status: "fehlgeschlagen", attempts: 1, permanent: true, nextAttemptAt: null },
+  { _id: "spaeter", createdAt: iso(), status: "wartend", attempts: 9, nextAttemptAt: iso(Date.now() + 3600_000) },
+]);
 
 const claims = await Promise.all(
   Array.from({ length: 400 }, (_, i) =>
@@ -44,6 +50,10 @@ const claims = await Promise.all(
   ),
 );
 const ids = claims.filter((doc) => doc !== null).map((doc) => doc._id);
+if (ids.includes("endgueltig") || ids.includes("spaeter")) {
+  console.error("FEHL: Ein nicht fälliger oder endgültig fehlgeschlagener Auftrag wurde übernommen.");
+  process.exit(1);
+}
 const unique = new Set(ids).size;
 const left = await ja.countDocuments(claimableFilter());
 await Promise.all([a.close(), b.close()]);

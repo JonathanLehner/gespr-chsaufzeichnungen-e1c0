@@ -479,6 +479,8 @@ function WorkerHealthPanel({ health }: { health: QueueHealth }) {
         ))}
       </div>
 
+      <LimiterPanel limiter={health.limiter} />
+
       {health.workers.length > 0 && (
         <div className="mt-3 overflow-x-auto">
           <table className="w-full min-w-[720px] border-collapse">
@@ -491,6 +493,7 @@ function WorkerHealthPanel({ health }: { health: QueueHealth }) {
                 <th className="th">Plätze</th>
                 <th className="th">Laufend</th>
                 <th className="th">Erledigt</th>
+                <th className="th">Zurückgestellt</th>
                 <th className="th">Fehlgeschlagen</th>
               </tr>
             </thead>
@@ -514,6 +517,7 @@ function WorkerHealthPanel({ health }: { health: QueueHealth }) {
                   <td className="td tabular-nums">{worker.concurrency}</td>
                   <td className="td tabular-nums">{worker.activeJobs.length}</td>
                   <td className="td tabular-nums">{worker.processed}</td>
+                  <td className="td tabular-nums">{worker.deferred ?? 0}</td>
                   <td className="td tabular-nums">{worker.failed}</td>
                 </tr>
               ))}
@@ -521,6 +525,48 @@ function WorkerHealthPanel({ health }: { health: QueueHealth }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Gemeinsame Drossel aller Instanzen: tatsächliche Rate und aktuelle Grenzen. */
+function LimiterPanel({ limiter }: { limiter: QueueHealth["limiter"] }) {
+  if (!limiter) return null;
+  const number = (value: number, digits = 1) =>
+    value.toLocaleString("de-CH", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const stats = [
+    { label: "Anfragen pro Minute (10 min)", value: number(limiter.perMinute) },
+    {
+      label:
+        limiter.allowedNow < limiter.maxConcurrent
+          ? `Laufend / erlaubt (Anlauf, sonst ${limiter.maxConcurrent})`
+          : "Laufend / erlaubt",
+      value: `${limiter.running} / ${limiter.allowedNow}`,
+    },
+    { label: "Mindestabstand zwischen Anfragen", value: `${number(limiter.minGapMs / 1000, 0)} s` },
+    { label: "Fehler (10 min)", value: String(limiter.failedLast10Min) },
+    {
+      label: "Mittlere Antwortzeit (10 min)",
+      value: limiter.avgMs === null ? "–" : `${number(limiter.avgMs / 1000)} s`,
+    },
+  ];
+  return (
+    <div className="mt-3">
+      <h4 className="text-[12px] font-semibold text-ink-soft">Anfragen an den Dienst, alle Instanzen</h4>
+      {limiter.pausedUntil && (
+        <p className="notice notice-warn mt-2" role="status">
+          Nach einer Störung pausiert bis {formatDateTimeWithSeconds(limiter.pausedUntil)}
+          {limiter.lastPauseReason ? `: ${limiter.lastPauseReason}` : "."}
+        </p>
+      )}
+      <div className="mt-2 grid gap-px overflow-hidden rounded-md border border-line bg-line sm:grid-cols-3 lg:grid-cols-5">
+        {stats.map((stat) => (
+          <div key={stat.label} className="bg-surface p-3">
+            <p className="text-xl font-semibold tabular-nums text-ink">{stat.value}</p>
+            <p className="mt-0.5 text-[12px] leading-snug text-ink-faint">{stat.label}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

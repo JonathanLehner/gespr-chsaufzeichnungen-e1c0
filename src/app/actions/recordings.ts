@@ -19,7 +19,7 @@ import {
   refreshRatingSummary,
   setDeletionFlag,
 } from "@/lib/recordings";
-import { requeueTranscription, type RequeueResult } from "@/lib/transcription";
+import { jobProgress, requeueTranscription, type RequeueResult } from "@/lib/transcription";
 import { getTemplateSettings } from "@/lib/settings";
 import { parseFilename } from "@/lib/filename-template";
 import { mimeFromExtension, fingerprintOf, MAX_UPLOAD_BYTES } from "@/lib/audio";
@@ -151,6 +151,7 @@ export type StatusUpdate = {
   nextAttemptAt: string | null;
   wordCount: number | null;
   speakerCount: number | null;
+  progressDone: number | null;
 };
 
 /**
@@ -162,10 +163,13 @@ export async function transcriptionStatusAction(ids: string[]): Promise<StatusUp
   await requireUser();
   if (ids.length === 0) return [];
   const rows = await findMany<Recording>(Collections.recordings, { _id: { $in: ids.slice(0, 100) } });
-  return rows.map(toStatusUpdate);
+  const progress = await jobProgress(
+    rows.filter((row) => row.transcriptionStatus === "in_arbeit").map((row) => row._id),
+  );
+  return rows.map((row) => toStatusUpdate(row, progress.get(row._id)?.progressDone ?? null));
 }
 
-function toStatusUpdate(row: Recording): StatusUpdate {
+function toStatusUpdate(row: Recording, progressDone: number | null): StatusUpdate {
   return {
     id: row._id,
     status: row.transcriptionStatus,
@@ -173,6 +177,7 @@ function toStatusUpdate(row: Recording): StatusUpdate {
     nextAttemptAt: row.transcriptionNextAttemptAt ?? null,
     wordCount: row.wordCount,
     speakerCount: row.speakerCount,
+    progressDone,
   };
 }
 

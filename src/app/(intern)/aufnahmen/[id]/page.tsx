@@ -5,14 +5,15 @@ import { requireUser } from "@/lib/auth";
 import { signPlaybackToken } from "@/lib/audio";
 import { Collections, findById } from "@/lib/db";
 import { getRecording, listComments, listRatings } from "@/lib/recordings";
-import { loadTranscript } from "@/lib/transcription";
-import { formatDateTime, formatDateTimeWithSeconds, formatDuration } from "@/lib/time";
+import { jobProgress, loadTranscript } from "@/lib/transcription";
+import { formatDateTime, formatDateTimeWithSeconds, formatDuration, renderTimestamp } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { RecordingPlayerPanel } from "@/components/recording-player-panel";
 import { CommentsPanel } from "@/components/comments-panel";
 import { RatingPanel } from "@/components/rating-panel";
 import { DeletionFlagButton } from "@/components/deletion-flag";
 import { TranscriptionWatcher } from "@/components/transcription-watcher";
+import { TranscriptionStatusLine } from "@/components/transcription-status-line";
 import type { Job } from "@/lib/types";
 
 export async function generateMetadata({
@@ -41,23 +42,41 @@ export default async function AufnahmeDetailPage({
   const recording = await getRecording(id);
   if (!recording) notFound();
 
-  const [segments, comments, ratings, job] = await Promise.all([
+  const [segments, comments, ratings, job, progressById] = await Promise.all([
     recording.transcriptionStatus === "abgeschlossen" ? loadTranscript(id) : Promise.resolve([]),
     listComments(id),
     listRatings(id),
     findById<Job>(Collections.jobs, id),
+    jobProgress(recording.transcriptionStatus === "in_arbeit" ? [id] : []),
   ]);
+  const progress = progressById.get(id);
+  const renderedAt = renderTimestamp();
 
   const token = signPlaybackToken(id, user.email);
   const audioSrc = `/api/audio/${id}?token=${encodeURIComponent(token)}`;
   const startMs = Number(Array.isArray(query.t) ? query.t[0] : query.t) || 0;
   const initialQuery = String((Array.isArray(query.q) ? query.q[0] : query.q) ?? "");
-  const failed = recording.transcriptionStatus === "fehlgeschlagen";
   const pending =
     recording.transcriptionStatus === "wartend" || recording.transcriptionStatus === "in_arbeit";
   const nextAttemptAt = recording.transcriptionNextAttemptAt ?? job?.nextAttemptAt ?? null;
-  const nextAttemptLabel =
-    failed && nextAttemptAt ? formatDateTimeWithSeconds(nextAttemptAt) : null;
+  const retryPending =
+    recording.transcriptionStatus === "wartend" &&
+    !!nextAttemptAt &&
+    Date.parse(nextAttemptAt) > renderedAt;
+  const nextAttemptLabel = retryPending ? formatDateTimeWithSeconds(nextAttemptAt) : null;
+  const finished =
+    recording.transcriptionStatus === "abgeschlossen" || recording.transcriptionStatus === "ohne_sprache";
+  const attempts = job?.attempts ?? recording.transcriptionAttempts ?? 0;
+  const timing = {
+    status: recording.transcriptionStatus,
+    queuedAt: recording.uploadedAt,
+    nextAttemptAt,
+    finishedAt: recording.transcriptionFinishedAt,
+    attempts,
+    progressDone: progress?.progressDone ?? null,
+    progressTotal: progress?.progressTotal ?? null,
+    updatedAt: progress?.updatedAt ?? recording.transcriptionStartedAt,
+  };
 
   const metadata: [string, React.ReactNode][] = [
     ["Anrufer", recording.callerName],
@@ -81,9 +100,19 @@ export default async function AufnahmeDetailPage({
     ],
     ["Hochgeladen von", `${recording.uploadedByName} (${recording.uploadedByEmail})`],
     ["Upload-Zeitpunkt", formatDateTimeWithSeconds(recording.uploadedAt)],
-    ["Transkription", <StatusBadge key="s" status={recording.transcriptionStatus} />],
     [
-      failed ? "Letzter Versuch" : "Auswertung abgeschlossen",
+      "Transkription",
+      <span key="s" className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <StatusBadge status={recording.transcriptionStatus} />
+        <TranscriptionStatusLine
+          timing={timing}
+          renderedAt={renderedAt}
+          className="text-[12px] text-ink-soft tabular-nums"
+        />
+      </span>,
+    ],
+    [
+      finished ? "Auswertung abgeschlossen" : "Letzter Versuch",
       recording.transcriptionFinishedAt
         ? formatDateTimeWithSeconds(recording.transcriptionFinishedAt)
         : "–",
@@ -102,7 +131,7 @@ export default async function AufnahmeDetailPage({
     ...(nextAttemptLabel
       ? ([["Nächster automatischer Versuch", `${nextAttemptLabel} Uhr`]] as [string, React.ReactNode][])
       : []),
-    ["Versuche", String(job?.attempts ?? recording.transcriptionAttempts ?? 0)],
+    ["Versuche", String(attempts)],
     [
       "Sprecher / Wörter",
       recording.speakerCount
@@ -164,9 +193,15 @@ export default async function AufnahmeDetailPage({
         </div>
       )}
 
-      {(pending || nextAttemptLabel) && (
+      {pending && (
         <TranscriptionWatcher
-          entries={[{ id: recording._id, status: recording.transcriptionStatus }]}
+          entries={[
+            {
+              id: recording._id,
+              status: recording.transcriptionStatus,
+              progressDone: progress?.progressDone ?? null,
+            },
+          ]}
         />
       )}
 

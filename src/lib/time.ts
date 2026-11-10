@@ -156,3 +156,40 @@ export function cetDayStartUtcIso(dateValue: string, endOfDay = false): string |
     : cetToUtcMs(Number(y), Number(mo), Number(d), 0, 0, 0);
   return new Date(ms).toISOString();
 }
+
+const timeFormatter = new Intl.DateTimeFormat("de-CH", {
+  timeZone: CALL_TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** Uhrzeit in CET; liegt der Zeitpunkt nicht am Tag von `nowMs`, mit Datum. */
+export function formatClock(iso: string | null | undefined, nowMs: number): string {
+  if (!iso) return "–";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "–";
+  return formatDate(iso) === formatDate(new Date(nowMs).toISOString())
+    ? timeFormatter.format(date)
+    : dateTimeFormatter.format(date);
+}
+
+/** Abstand zu `nowMs` in Worten: „gerade eben“, „vor 3 Min.“, „vor 2 Std.“. */
+export function formatAgo(iso: string | null | undefined, nowMs: number): string {
+  if (!iso) return "–";
+  const ms = nowMs - Date.parse(iso);
+  if (!Number.isFinite(ms)) return "–";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "gerade eben";
+  if (minutes < 60) return `vor ${minutes} Min.`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `vor ${hours} Std.`;
+  return `am ${formatDateTime(iso)}`;
+}
+
+/**
+ * Zeitpunkt eines Server-Renders. Seiten mit Zeitangaben wie „vor 1 Min.“
+ * rendern ohnehin je Anfrage; Client-Komponenten zählen davon ausgehend weiter.
+ */
+export function renderTimestamp(): number {
+  return Date.now();
+}

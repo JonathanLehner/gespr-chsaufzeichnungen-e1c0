@@ -8,16 +8,18 @@ import type { TranscriptionStatus } from "@/lib/types";
 export type WatchedRecording = {
   id: string;
   status: TranscriptionStatus;
-  /** Gesetzt, wenn für einen fehlgeschlagenen Auftrag noch eine Wiederholung aussteht. */
-  retryScheduled?: boolean;
+  /** Fertige Abschnitte eines laufenden Auftrags; eine Änderung lädt die Ansicht neu. */
+  progressDone?: number | null;
 };
 
 const OPEN_INTERVAL_MS = 8000;
 const RETRY_INTERVAL_MS = 30000;
 
-function signatureOf(entries: { id: string; status: TranscriptionStatus }[]): string {
+function signatureOf(
+  entries: { id: string; status: TranscriptionStatus; progressDone?: number | null }[],
+): string {
   return entries
-    .map((entry) => `${entry.id}:${entry.status}`)
+    .map((entry) => `${entry.id}:${entry.status}:${entry.progressDone ?? ""}`)
     .sort()
     .join("|");
 }

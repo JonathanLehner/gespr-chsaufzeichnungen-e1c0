@@ -233,17 +233,33 @@ Dienst bearbeitet also beide.
 | --- | --- | --- |
 | `MONGODB_URI` | ja | Datenbank mit `jobs`, `recordings`, Transkripten |
 | `CLAWCORP_API_KEY` | ja | Gemini über die Plattform |
-| `TRANSCRIBER_CONCURRENCY` | nein | gleichzeitig bearbeitete Aufträge, Standard 2, höchstens 8 |
+| `TRANSCRIBER_CONCURRENCY` | nein | gleichzeitig bearbeitete Aufträge je Instanz, Standard 2, höchstens 8 |
+| `TRANSCRIBER_GEMINI_CONCURRENCY` | nein | gleichzeitige Anfragen an Gemini über **alle** Instanzen, Standard 2 |
+| `TRANSCRIBER_GEMINI_GAP_MS` | nein | Mindestabstand zwischen zwei Anfragestarts über alle Instanzen, Standard 4000 |
+| `TRANSCRIBER_GEMINI_URL` | nein | nur für lokale Tests (nachgebildeter Dienst), sonst leer lassen |
 
 - **Übernahme**: atomar per `findOneAndUpdate` (wartend, fällige Wiederholung oder verwaiste
   Sperre → `in_arbeit` mit `lockedAt`, `lockId`, `workerId`). Jeder spätere Schreibvorgang des
   Dienstes prüft `lockId`; ein Auftrag läuft deshalb nie doppelt, auch nicht über zwei Instanzen.
 - **Lebenszeichen**: alle 30 s erneuert ein laufender Auftrag `lockedAt`. Bleibt es drei Minuten
   aus (abgebrochener Container), übernimmt ein anderer Platz den Auftrag an der gespeicherten Stelle
-  (`progress`, je Abschnitt). Wird ein Auftrag mehr als zweimal verwaist vorgefunden, gilt er als
-  fehlgeschlagen.
-- **Wiederholung**: höchstens drei Versuche, nach 3 und 15 Minuten. „Erneut starten“ im
-  Admin-Dashboard setzt den Auftrag nur auf `wartend` zurück.
+  (`progress`, je Abschnitt). Wird ein Auftrag mehr als zweimal verwaist vorgefunden, wird er mit
+  wachsender Pause zurückgestellt.
+- **Wiederholung ohne Obergrenze**: Vorübergehende Fehler (Zeitüberschreitung, 5xx, Netzwerk,
+  „keinen Abschnitt geantwortet“, Kostenlimit von Gemini) beenden einen Auftrag nie. Er bleibt
+  `wartend` mit `nextAttemptAt` (2 min, verdoppelt, höchstens 30 min, ±10 %) und setzt an der
+  gespeicherten Stelle fort; ein Abschnitt, der nicht antwortet, wird später nachgeholt statt als
+  Lücke gespeichert. Endgültig `fehlgeschlagen` (`permanent: true`) wird nur, was kein Versuch
+  behebt: Audiodatei fehlt (404/410), ist leer oder lässt sich nicht dekodieren, Aufnahme gelöscht.
+  Die Meldung nennt die genaue Ursache. Beim Start reiht der Dienst ältere, wegen vorübergehender
+  Fehler beendete Aufträge wieder ein. „Erneut starten“ setzt den Auftrag auf `wartend` zurück.
+- **Drossel** (`transcriber/limiter.ts`, Sammlung `transcriber_limiter`): Alle Instanzen
+  (Staging und Produktion teilen die Datenbank) teilen sich eine Grenze: höchstens
+  `TRANSCRIBER_GEMINI_CONCURRENCY` Anfragen gleichzeitig und `TRANSCRIBER_GEMINI_GAP_MS` zwischen
+  zwei Starts, atomar vergeben per `findOneAndUpdate` mit Pipeline. Nach Zeitüberschreitung oder
+  5xx ruht die ganze Spur 30 s (anhaltend je 60 s) und läuft dann mit einer Anfrage zugleich an,
+  bis drei in Folge gelingen. Das Admin-Dashboard zeigt Rate, Grenzen und Pause; der Dienst
+  protokolliert die Rate alle fünf Minuten.
 - **Reihenfolge**: Jeder Platz wechselt bei jeder Übernahme zwischen dem neuesten und dem ältesten
   fälligen Auftrag. Ein neuer Upload wartet damit höchstens auf den nächsten freien Platz statt
   hinter dem gesamten Rückstand eines Massen-Uploads, und der Rückstand (inklusive Wiederholungen
@@ -257,6 +273,14 @@ Dienst bearbeitet also beide.
   Stunde.
 - **Audio**: geholt über die gespeicherte Adresse (`/api/dateien/<schlüssel>` der Anwendung, liefert
   aus dem R2-Bucket der jeweiligen Umgebung), daher keine R2-Zugangsdaten im Dienst.
+
+Prüfungen gegen eine Wegwerf-Datenbank (nie Produktion; die Sammlungen werden geleert):
+
+```bash
+TEST_MONGODB_URI="mongodb://localhost:27017/test?directConnection=true" npx tsx scripts/check-transcriber-claim.mts
+TEST_MONGODB_URI=... npx tsx scripts/check-gemini-limiter.mts
+TEST_MONGODB_URI=... npx tsx scripts/check-transcriber-retry.mts   # rund 4 min, zwei Instanzen gegen nachgebildeten Dienst
+```
 
 ```bash
 docker build -t transcriber transcriber

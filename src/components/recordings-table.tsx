@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useTransition, type ReactNode } from "react";
+import { Fragment, useMemo, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -22,8 +22,12 @@ import {
   DeletionFlagProvider,
 } from "@/components/deletion-flag";
 import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
+import {
+  TranscriptionStatusLine,
+  type TranscriptionTiming,
+} from "@/components/transcription-status-line";
 
-export type TableRow = Pick<
+export type TableRow = { transcriptionTiming: TranscriptionTiming } & Pick<
   RecordingRow,
   | "_id"
   | "callAtUtc"
@@ -101,7 +105,8 @@ function labelled(label: string, content: ReactNode) {
   );
 }
 
-const columns: ColumnDef<typeof features, TableRow>[] = [
+function buildColumns(renderedAt: number): ColumnDef<typeof features, TableRow>[] {
+  return [
   sortable("zeitpunkt", "Gesprächs\u00adzeitpunkt (CET)", (row) => (
     <>
       <Link href={`/aufnahmen/${row._id}`} className="text-petrol hover:underline">
@@ -141,6 +146,11 @@ const columns: ColumnDef<typeof features, TableRow>[] = [
       "Transkription",
       <>
         <StatusBadge status={row.transcriptionStatus} />
+        <TranscriptionStatusLine
+          timing={row.transcriptionTiming}
+          renderedAt={renderedAt}
+          className="mt-0.5 block text-[12px] leading-snug text-ink-soft tabular-nums min-[700px]:max-w-[220px]"
+        />
         {row.transcriptionStatus === "fehlgeschlagen" && (
           <span className="mt-0.5 block text-[12px] leading-snug text-ink-faint min-[700px]:max-w-[220px]">
             {describeTranscriptionError(row.transcriptionError).message}
@@ -176,7 +186,8 @@ const columns: ColumnDef<typeof features, TableRow>[] = [
       </div>
     ),
   },
-];
+  ];
+}
 
 /**
  * Aufnahmeliste. Sortiert wird auf dem Server über den ganzen gefilterten
@@ -188,12 +199,16 @@ export function RecordingsTable({
   sortKey,
   sortDir,
   query,
+  renderedAt,
 }: {
   rows: TableRow[];
   sortKey: SortKey;
   sortDir: SortDir;
   query: string;
+  /** Zeitpunkt des Server-Renders, Bezug für relative Zeitangaben. */
+  renderedAt: number;
 }) {
+  const columns = useMemo(() => buildColumns(renderedAt), [renderedAt]);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();

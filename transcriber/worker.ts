@@ -15,6 +15,15 @@
  *    neuesten und dem ältesten fälligen Auftrag. Ein neuer Upload wartet so
  *    höchstens, bis der nächste Platz frei wird, statt hinter Hunderten
  *    Aufträgen eines Massen-Uploads; der Rückstand läuft trotzdem weiter ab.
+ *  - Vorübergehende Fehler (Zeitüberschreitung, 5xx, Netzwerk, Kostenlimit
+ *    des Dienstes) beenden einen Auftrag nie: Er bleibt `wartend` mit
+ *    `nextAttemptAt` (2 min, verdoppelt bis höchstens 30 min) und setzt beim
+ *    nächsten Versuch an der gespeicherten Stelle fort. Endgültig
+ *    `fehlgeschlagen` wird nur, was kein Versuch beheben kann: fehlende oder
+ *    nicht dekodierbare Audiodatei, gelöschte Aufnahme.
+ *  - Alle Anfragen an den Dienst laufen durch die gemeinsame Drossel
+ *    (`limiter.ts`): wenige gleichzeitig über alle Instanzen, Mindestabstand
+ *    zwischen den Starts, Pause der ganzen Spur nach einer Störung.
  *  - Während ein Auftrag läuft, wird alle 30 s `lockedAt` erneuert. Fehlt das
  *    Lebenszeichen länger als drei Minuten, übernimmt ein anderer Platz den
  *    Auftrag an der gespeicherten Stelle (`progress`).
@@ -38,15 +47,19 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { MongoClient, type ChangeStream, type Collection } from "mongodb";
+import { AbortedWhileWaiting, GeminiLimiter } from "./limiter";
 import { alignTranscript } from "./shared/forced-alignment";
 import {
   HEARTBEAT_MS,
-  MAX_ATTEMPTS,
+  LIMITER_COLLECTION,
   STALE_LOCK_MS,
   WORKERS_COLLECTION,
   claimableFilter,
   iso,
+  isTransientError,
   nextAttemptAfter,
+  scheduledRetryFilter,
+  type LimiterDoc,
 } from "./shared/queue";
 import {
   PROMPT,
@@ -63,13 +76,17 @@ import type { AudioMime, TranscriptSegment } from "./shared/types";
 
 const run = promisify(execFile);
 
-const GEMINI_URL = "https://www.clawcorp.ai/api/platform/gemini";
+/** Überschreibbar nur für lokale Tests (`scripts/check-transcriber-retry.mts`). */
+const geminiUrl = () => process.env.TRANSCRIBER_GEMINI_URL || "https://www.clawcorp.ai/api/platform/gemini";
 const MODEL = "gemini-2.5-flash";
-/** Wird ein Auftrag so oft verwaist vorgefunden, gilt er als fehlgeschlagen. */
+/** Wird ein Auftrag so oft verwaist vorgefunden, wird er zurückgestellt statt sofort fortgesetzt. */
 const MAX_STALE_CLAIMS = 2;
 const CHUNK_MS = 60 * 1000;
 const CHUNK_CONCURRENCY = 2;
+/** Anläufe je Abschnitt und Lauf bei inhaltlichen Fehlern (ungültige Antwort, 400). */
 const CHUNK_ATTEMPTS = 3;
+/** Anläufe je Abschnitt und Lauf bei Störungen; danach wird der ganze Auftrag zurückgestellt. */
+const CHUNK_TRANSIENT_ATTEMPTS = 2;
 const CHUNK_RETRY_PAUSE_MS = 2000;
 const GEMINI_TIMEOUT_MS = 120 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 120 * 1000;
@@ -81,13 +98,15 @@ const IDLE_MAX_MS = 5 * 60 * 1000;
 /** Ruhepause, wenn kein Change Stream verfügbar ist (Einzelserver ohne Replikation). */
 const IDLE_FALLBACK_MS = 30 * 1000;
 const ERROR_PAUSE_MS = 10 * 1000;
+/** Abstand der Protokollzeile mit der tatsächlichen Anfragerate. */
+const RATE_LOG_MS = 5 * 60 * 1000;
 /** Docker beendet nach 10 s hart; bis dahin muss der Zwischenstand gesichert sein. */
 const SHUTDOWN_GRACE_MS = 8 * 1000;
 
 type Progress = {
   chunkCount: number;
   chunks: (NormalizedTranscript | null)[];
-  /** Abschnitte, auf die der Dienst auch nach allen Anläufen nicht antwortete. */
+  /** Abschnitte ohne verwertbare Antwort (inhaltlicher Fehler); bleiben als Lücke. */
   failed: number[];
 };
 
@@ -107,6 +126,9 @@ type JobDoc = {
   /** Beim Beenden eines Dienstes freigegeben; wird an derselben Stelle fortgesetzt. */
   paused?: boolean | null;
   staleClaims?: number;
+  lastError?: string | null;
+  /** Endgültig fehlgeschlagen; wird nicht automatisch wiederholt. */
+  permanent?: boolean | null;
 };
 
 type RecordingDoc = {
@@ -126,6 +148,7 @@ type WorkerDoc = {
   activeJobs: string[];
   processed: number;
   failed: number;
+  deferred?: number;
 };
 
 type Db = {
@@ -134,6 +157,7 @@ type Db = {
   parts: Collection<{ _id: string }>;
   index: Collection<{ _id: string }>;
   workers: Collection<WorkerDoc>;
+  limiter: Collection<LimiterDoc>;
 };
 
 function env(name: string): string {
@@ -142,10 +166,16 @@ function env(name: string): string {
   return value;
 }
 
-function concurrency(): number {
-  const value = Number.parseInt(process.env.TRANSCRIBER_CONCURRENCY ?? "", 10);
-  return Number.isFinite(value) && value >= 1 ? Math.min(value, 8) : 2;
+function intEnv(name: string, fallback: number, min: number, max: number): number {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value >= min ? Math.min(value, max) : fallback;
 }
+
+const concurrency = () => intEnv("TRANSCRIBER_CONCURRENCY", 2, 1, 8);
+/** Gleichzeitige Anfragen an den Dienst, über alle Instanzen zusammen. */
+const geminiConcurrency = () => intEnv("TRANSCRIBER_GEMINI_CONCURRENCY", 2, 1, 8);
+/** Mindestabstand zwischen zwei Anfragestarts, über alle Instanzen zusammen. */
+const geminiGapMs = () => intEnv("TRANSCRIBER_GEMINI_GAP_MS", 4000, 0, 120_000);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -240,10 +270,7 @@ function watchJobs(db: Db): () => Promise<void> {
 async function msUntilNextDue(db: Db): Promise<number> {
   const limit = changeStreamActive ? IDLE_MAX_MS : IDLE_FALLBACK_MS;
   const [retry, locked] = await Promise.all([
-    db.jobs.findOne(
-      { status: "fehlgeschlagen", attempts: { $lt: MAX_ATTEMPTS }, nextAttemptAt: { $ne: null } },
-      { sort: { nextAttemptAt: 1 }, projection: { nextAttemptAt: 1 } },
-    ),
+    db.jobs.findOne(scheduledRetryFilter(), { sort: { nextAttemptAt: 1 }, projection: { nextAttemptAt: 1 } }),
     db.jobs.findOne(
       { status: "in_arbeit", lockedAt: { $ne: null } },
       { sort: { lockedAt: 1 }, projection: { lockedAt: 1 } },
@@ -275,22 +302,61 @@ async function claimNext(db: Db, lockId: string, newestFirst: boolean): Promise<
 
 /* --------------------------------------------------------------- Audio */
 
+/** Kein weiterer Versuch kann das beheben; der Auftrag endet als „fehlgeschlagen“. */
+class PermanentError extends Error {}
+
+/** Inhaltlicher Fehler einer einzelnen Anfrage (ungültige Antwort, 400, 413). */
+class ContentError extends Error {}
+
 async function download(url: string, signal: AbortSignal): Promise<Uint8Array> {
-  const res = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), signal]) });
-  if (!res.ok) throw new Error(`Die Audiodatei konnte nicht gelesen werden (${res.status}).`);
-  return new Uint8Array(await res.arrayBuffer());
+  let res: Response;
+  try {
+    new URL(url);
+  } catch {
+    throw new PermanentError(`Die Adresse der Audiodatei ist ungültig: ${url.slice(0, 120)}`);
+  }
+  try {
+    res = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), signal]) });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error(`Download der Audiodatei: Zeitüberschreitung nach ${DOWNLOAD_TIMEOUT_MS / 1000} s.`);
+    }
+    throw new Error(`Download der Audiodatei: Netzwerkfehler (${errorText(error)}).`);
+  }
+  if (res.status === 404 || res.status === 410) {
+    throw new PermanentError(`Die Audiodatei ist im Speicher nicht mehr vorhanden (HTTP ${res.status}).`);
+  }
+  if (!res.ok) throw new Error(`Die Audiodatei konnte nicht geladen werden (HTTP ${res.status}).`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength === 0) throw new PermanentError("Die Audiodatei ist leer (0 Byte).");
+  return bytes;
 }
 
-async function probeDurationMs(file: string): Promise<number | null> {
+/**
+ * Prüft, ob ffmpeg die Datei lesen kann, und liefert die Dauer. Eine Datei
+ * ohne lesbare Tonspur ist ein endgültiger Fehler; fehlt dagegen ffprobe
+ * selbst, ist das ein Fehler des Dienstes und wird später wiederholt.
+ */
+async function probeAudio(file: string): Promise<number | null> {
+  let stdout: string;
   try {
-    const { stdout } = await run("ffprobe", [
-      "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", file,
-    ]);
-    const seconds = Number(stdout.trim());
-    return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
-  } catch {
-    return null;
+    ({ stdout } = await run("ffprobe", [
+      "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name:format=duration",
+      "-of", "json", file,
+    ]));
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: string };
+    // Startfehler (ENOENT) oder Abbruch durch ein Signal: kein Befund über die Datei.
+    if (typeof failure.code === "string" || (failure as { signal?: string }).signal) throw error;
+    const detail = (failure.stderr ?? "").trim().split("\n").pop()?.replace(/^.*?: /, "") || "unbekanntes Format";
+    throw new PermanentError(`Die Audiodatei lässt sich nicht dekodieren (${detail.slice(0, 160)}).`);
   }
+  const info = JSON.parse(stdout || "{}") as { streams?: unknown[]; format?: { duration?: string } };
+  if (!info.streams || info.streams.length === 0) {
+    throw new PermanentError("Die Audiodatei enthält keine Tonspur.");
+  }
+  const seconds = Number(info.format?.duration);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
 }
 
 async function encodeChunk(file: string, startMs: number, bitrate: string): Promise<string> {
@@ -315,7 +381,7 @@ async function requestTranscript(
 ): Promise<NormalizedTranscript> {
   let res: Response;
   try {
-    res = await fetch(GEMINI_URL, {
+    res = await fetch(geminiUrl(), {
       method: "POST",
       headers: { Authorization: `Bearer ${env("CLAWCORP_API_KEY")}`, "content-type": "application/json" },
       body: JSON.stringify({
@@ -341,14 +407,39 @@ async function requestTranscript(
     } catch {
       /* Rohtext verwenden */
     }
-    throw new Error(`/gemini fehlgeschlagen (${res.status}): ${message}`);
+    const failure = `/gemini fehlgeschlagen (${res.status}): ${message}`;
+    // 400, 413, 415, 422 betreffen diese eine Anfrage; alles andere ist eine Störung des Dienstes.
+    if ([400, 413, 415, 422].includes(res.status) && !isTransientError(message)) throw new ContentError(failure);
+    throw new Error(failure);
   }
-  return normalizeTranscript(parseJsonLoosely((JSON.parse(text) as { text?: string }).text ?? ""));
+  try {
+    return normalizeTranscript(parseJsonLoosely((JSON.parse(text) as { text?: string }).text ?? ""));
+  } catch (error) {
+    throw new ContentError(errorText(error));
+  }
 }
 
 /* --------------------------------------------------------------- Ablauf */
 
 class LockLost extends Error {}
+
+let limiter: GeminiLimiter;
+
+/** Eine Anfrage an den Dienst, eingereiht in die gemeinsame Drossel. */
+async function throttledTranscript(prompt: string, audio: string, signal: AbortSignal) {
+  const lease = await limiter.acquire(signal);
+  try {
+    const result = await requestTranscript(prompt, audio, signal);
+    await limiter.release(lease, { ok: true });
+    return result;
+  } catch (error) {
+    const reason = errorText(error);
+    await limiter
+      .release(lease, signal.aborted ? { ok: false, aborted: true } : { ok: false, transient: isTransientError(reason), reason })
+      .catch((releaseError) => log(`Drossel nicht freigegeben (${errorText(releaseError)})`));
+    throw error;
+  }
+}
 
 type Outcome = { label: string; ok: boolean };
 
@@ -360,60 +451,90 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
   const orphaned = before.status === "in_arbeit" && !!before.lockedAt;
   const attempts = resumed ? Math.max(before.attempts ?? 0, 1) : (before.attempts ?? 0) + 1;
   const staleClaims = (before.staleClaims ?? 0) + (orphaned ? 1 : 0);
-  let progress: Progress | null = resumed ? (before.progress ?? null) : null;
+  // Ein Zwischenstand bleibt über Wiederholungen erhalten; fertige Abschnitte
+  // werden nicht noch einmal angefragt. `resetJob` verwirft ihn.
+  let progress: Progress | null = before.progress ?? null;
 
-  const finish = async (status: string, fields: { lastError?: string | null; nextAttemptAt?: string | null } = {}) => {
+  const progressFields = (state: Progress | null) => ({
+    progress: state,
+    progressDone: state ? state.chunks.filter(Boolean).length + state.failed.length : null,
+    progressTotal: state?.chunkCount ?? null,
+  });
+
+  const mirror = (fields: Record<string, unknown>) => db.recordings.updateOne({ _id: id }, { $set: fields });
+
+  /** Endzustand: abgeschlossen, ohne Sprache oder endgültig fehlgeschlagen. */
+  const finish = async (status: string, lastError: string | null = null) => {
     const closedAt = iso();
-    const lastError = fields.lastError ?? null;
-    const nextAttemptAt = fields.nextAttemptAt ?? null;
     const done = await db.jobs.updateOne(own, {
       $set: {
-        status, finishedAt: closedAt, nextAttemptAt, lastError,
-        lockedAt: null, lockId: null, progress: null, paused: null,
+        status, finishedAt: closedAt, nextAttemptAt: null, lastError, permanent: status === "fehlgeschlagen",
+        lockedAt: null, lockId: null, paused: null, staleClaims: 0, progressAt: null,
+        ...progressFields(null),
       },
     });
     if (done.matchedCount === 0) throw new LockLost();
-    await db.recordings.updateOne(
-      { _id: id },
-      {
-        $set: {
-          transcriptionStatus: status,
-          transcriptionError: lastError,
-          transcriptionFinishedAt: closedAt,
-          transcriptionNextAttemptAt: nextAttemptAt,
-          transcriptionAttempts: attempts,
-        },
-      },
-    );
+    await mirror({
+      transcriptionStatus: status,
+      transcriptionError: lastError,
+      transcriptionFinishedAt: closedAt,
+      transcriptionNextAttemptAt: null,
+      transcriptionAttempts: attempts,
+    });
   };
   const fail = async (message: string): Promise<Outcome> => {
-    await finish("fehlgeschlagen", { lastError: message.slice(0, 400), nextAttemptAt: nextAttemptAfter(attempts) });
+    await finish("fehlgeschlagen", message.slice(0, 400));
     return { label: `fehlgeschlagen: ${message}`, ok: false };
+  };
+  /**
+   * Vorübergehender Fehler: Der Auftrag bleibt wartend und wird nach einer
+   * wachsenden Pause (höchstens 30 min) an derselben Stelle fortgesetzt.
+   */
+  const defer = async (message: string, delayAttempts = attempts): Promise<Outcome> => {
+    const closedAt = iso();
+    const nextAttemptAt = nextAttemptAfter(delayAttempts);
+    const lastError = message.slice(0, 400);
+    const done = await db.jobs.updateOne(own, {
+      $set: {
+        status: "wartend", finishedAt: closedAt, nextAttemptAt, lastError, permanent: null,
+        lockedAt: null, lockId: null, workerId: null, paused: null, staleClaims,
+        ...progressFields(progress),
+      },
+    });
+    if (done.matchedCount === 0) throw new LockLost();
+    await mirror({
+      transcriptionStatus: "wartend",
+      transcriptionError: lastError,
+      transcriptionFinishedAt: closedAt,
+      transcriptionNextAttemptAt: nextAttemptAt,
+      transcriptionAttempts: attempts,
+    });
+    return { label: `zurückgestellt bis ${nextAttemptAt}: ${message}`, ok: false };
   };
   /** Gibt den Auftrag beim Beenden frei; ein anderer Platz setzt an derselben Stelle fort. */
   const pause = async (): Promise<Outcome> => {
     const released = await db.jobs.updateOne(own, {
       $set: {
         status: "wartend", paused: true, lockedAt: null, lockId: null, workerId: null,
-        ...(progress ? { progress } : {}),
+        ...(progress ? progressFields(progress) : {}),
       },
     });
     if (released.matchedCount === 0) return { label: "Auftrag wurde zwischenzeitlich zurückgesetzt", ok: false };
-    await db.recordings.updateOne({ _id: id }, { $set: { transcriptionStatus: "wartend" } });
+    await mirror({ transcriptionStatus: "wartend" });
     const doneCount = progress?.chunks.filter(Boolean).length ?? 0;
     return { label: `freigegeben bei ${doneCount}/${progress?.chunkCount ?? "?"} Abschnitten`, ok: false };
   };
 
   const recording = await db.recordings.findOne({ _id: id });
   if (!recording) {
-    await db.jobs.updateOne(own, { $set: { attempts: MAX_ATTEMPTS } });
-    await finish("fehlgeschlagen", { lastError: "Aufnahme nicht gefunden." });
+    await finish("fehlgeschlagen", "Die Aufnahme wurde gelöscht.");
     return { label: "Aufnahme fehlt", ok: false };
   }
   if (staleClaims > MAX_STALE_CLAIMS) {
-    await db.jobs.updateOne(own, { $set: { attempts: MAX_ATTEMPTS, staleClaims } });
-    await finish("fehlgeschlagen", { lastError: "Die Transkription wurde wiederholt unterbrochen." });
-    return { label: "wiederholt unterbrochen", ok: false };
+    // Der Dienst wurde mitten in diesem Auftrag mehrfach beendet. Statt sofort
+    // weiterzumachen, wird er mit wachsender Pause zurückgestellt.
+    await db.jobs.updateOne(own, { $set: { attempts } });
+    return await defer("Die Transkription wurde wiederholt unterbrochen.", staleClaims);
   }
 
   await db.jobs.updateOne(own, {
@@ -423,22 +544,17 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       nextAttemptAt: null,
       paused: null,
       startedAt: resumed ? (before.startedAt ?? now) : now,
-      ...(resumed ? {} : { progress: null }),
+      progressAt: now,
     },
   });
-  await db.recordings.updateOne(
-    { _id: id },
-    {
-      $set: {
-        transcriptionStatus: "in_arbeit",
-        transcriptionError: null,
-        transcriptionNextAttemptAt: null,
-        transcriptionFinishedAt: null,
-        transcriptionAttempts: attempts,
-        ...(resumed ? {} : { transcriptionStartedAt: now }),
-      },
-    },
-  );
+  await mirror({
+    transcriptionStatus: "in_arbeit",
+    transcriptionError: null,
+    transcriptionNextAttemptAt: null,
+    transcriptionFinishedAt: null,
+    transcriptionAttempts: attempts,
+    ...(resumed ? {} : { transcriptionStartedAt: now }),
+  });
 
   // Lebenszeichen des Auftrags. Fehlt die Sperre (zurückgesetzt oder von einem
   // anderen Platz übernommen), wird der Lauf sofort abgebrochen.
@@ -463,7 +579,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const bytes = await download(recording.audioUrl, signal);
     const file = join(dir, "audio");
     await writeFile(file, bytes);
-    const measuredMs = await probeDurationMs(file);
+    const measuredMs = await probeAudio(file);
     const durationMs = measuredMs ?? recording.durationMs ?? CHUNK_MS;
     const chunkCount = Math.max(1, Math.ceil(durationMs / CHUNK_MS));
 
@@ -475,47 +591,67 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const pending = state.chunks
       .map((chunk, index) => (chunk === null && !state.failed.includes(index) ? index : -1))
       .filter((index) => index >= 0);
+    await db.jobs.updateOne(own, { $set: progressFields(state) });
+
+    /** Letzte Störung eines Abschnitts; beendet den Lauf und stellt den Auftrag zurück. */
+    let deferredBy: string | null = null;
+    const stopRun = () => interrupted() || deferredBy !== null;
 
     let next = 0;
     const chunkWorker = async () => {
-      while (next < pending.length && !interrupted()) {
+      while (next < pending.length && !stopRun()) {
         const index = pending[next++];
         const startMs = index * CHUNK_MS;
         const prompt = chunkCount === 1 ? PROMPT : chunkPrompt(index, chunkCount);
         let result: NormalizedTranscript | null = null;
-        for (let attempt = 1; attempt <= CHUNK_ATTEMPTS && !result && !interrupted(); attempt += 1) {
+        let transientError: string | null = null;
+        for (let attempt = 1; attempt <= CHUNK_ATTEMPTS && !result && !stopRun(); attempt += 1) {
           try {
             // Jeder Anlauf mit anderer Bitrate: Eine Wiederholung mit identischer
             // Anfrage blieb in der Messung beim Dienst wiederholt hängen.
             const bitrate = BITRATES[attempt - 1] ?? "12k";
             let audio = await encodeChunk(file, startMs, bitrate);
             if (audio.length > MAX_INLINE_CHARS) audio = await encodeChunk(file, startMs, "10k");
-            const part = await requestTranscript(prompt, audio, signal);
+            const part = await throttledTranscript(prompt, audio, signal);
             result = { ...part, segments: shiftSegments(part.segments, startMs) };
+            transientError = null;
           } catch (error) {
-            if (interrupted()) break;
+            if (interrupted() || error instanceof AbortedWhileWaiting) break;
             log(`${id} Abschnitt ${index + 1}/${chunkCount}: Anlauf ${attempt} – ${errorText(error)}`);
+            transientError = error instanceof ContentError ? null : errorText(error);
+            if (transientError && attempt >= CHUNK_TRANSIENT_ATTEMPTS) break;
             if (attempt < CHUNK_ATTEMPTS) await sleep(CHUNK_RETRY_PAUSE_MS);
           }
         }
         // Unterbrochen: Abschnitt bleibt offen für den nächsten Lauf.
         if (!result && interrupted()) break;
+        if (!result && transientError) {
+          // Störung: Abschnitt bleibt offen und wird beim nächsten Versuch nachgeholt.
+          deferredBy ??= transientError;
+          break;
+        }
         if (result) state.chunks[index] = result;
         else state.failed.push(index);
         // Zwischenstand nach jedem Abschnitt sichern; beide Abschnitt-Worker
         // schreiben denselben Stand, der letzte Schreibvorgang enthält also beide.
-        const written = await db.jobs.updateOne(own, { $set: { progress: state, lockedAt: iso() } });
+        const written = await db.jobs.updateOne(own, {
+          $set: { ...progressFields(state), lockedAt: iso(), progressAt: iso() },
+        });
         if (written.matchedCount === 0) throw new LockLost();
       }
     };
     await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, pending.length) }, chunkWorker));
     if (lost) throw new LockLost();
     if (stopping) return await pause();
+    if (deferredBy) return await defer(deferredBy);
 
     const done = state.chunks.filter((chunk): chunk is NormalizedTranscript => chunk !== null);
     if (done.length === 0) {
-      return await fail(
-        state.failed.length > 0 && chunkCount > 1
+      // Keine einzige verwertbare Antwort: kein Transkript aus lauter Lücken
+      // speichern, sondern alle Abschnitte später erneut anfragen.
+      state.failed = [];
+      return await defer(
+        chunkCount > 1
           ? "Der Transkriptionsdienst hat auf keinen Abschnitt der Aufnahme geantwortet."
           : "Der Transkriptionsdienst hat nicht geantwortet.",
       );
@@ -556,7 +692,8 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       return { label: "Auftrag wurde zwischenzeitlich zurückgesetzt oder übernommen", ok: false };
     }
     if (stopping) return await pause();
-    return await fail(errorText(error));
+    if (error instanceof PermanentError) return await fail(error.message);
+    return await defer(errorText(error));
   } finally {
     clearInterval(heartbeat);
     await rm(dir, { recursive: true, force: true });
@@ -573,7 +710,7 @@ async function saveTranscript(db: Db, recordingId: string, segments: TranscriptS
 
 /* --------------------------------------------------------------- Dienst-Schleife */
 
-const health = { activeJobs: new Set<string>(), processed: 0, failed: 0 };
+const health = { activeJobs: new Set<string>(), processed: 0, failed: 0, deferred: 0 };
 
 async function writeHealth(db: Db, extra: Partial<WorkerDoc> = {}) {
   await db.workers.updateOne(
@@ -584,6 +721,7 @@ async function writeHealth(db: Db, extra: Partial<WorkerDoc> = {}) {
         activeJobs: [...health.activeJobs],
         processed: health.processed,
         failed: health.failed,
+        deferred: health.deferred,
         ...extra,
       },
     },
@@ -616,6 +754,7 @@ async function slot(db: Db, index: number): Promise<void> {
       const outcome = await processJob(db, job, lockId);
       if (outcome.ok) health.processed += 1;
       else if (outcome.label.startsWith("fehlgeschlagen")) health.failed += 1;
+      else if (outcome.label.startsWith("zurückgestellt")) health.deferred += 1;
       log(
         `Platz ${index + 1} ${newestFirst ? "neu" : "alt"} ${job._id}: ${outcome.label} ` +
           `(${Math.round((Date.now() - started) / 1000)} s)`,
@@ -629,6 +768,29 @@ async function slot(db: Db, index: number): Promise<void> {
   }
 }
 
+/**
+ * Ältere Fassungen des Dienstes beendeten Aufträge nach drei vorübergehenden
+ * Fehlern endgültig. Solche Aufträge kommen beim Start wieder in die
+ * Warteschlange; endgültige Fehler (fehlende Datei) bleiben, wie sie sind.
+ */
+async function requeueTransientFailures(db: Db): Promise<void> {
+  const failed = await db.jobs
+    .find({ status: "fehlgeschlagen", permanent: { $ne: true } }, { projection: { lastError: 1 } })
+    .toArray();
+  const ids = failed.filter((job) => isTransientError(job.lastError ?? "")).map((job) => job._id);
+  if (ids.length === 0) return;
+  const at = iso();
+  await db.jobs.updateMany(
+    { _id: { $in: ids }, status: "fehlgeschlagen" },
+    { $set: { status: "wartend", nextAttemptAt: at, lockedAt: null, lockId: null, workerId: null } },
+  );
+  await db.recordings.updateMany(
+    { _id: { $in: ids }, transcriptionStatus: "fehlgeschlagen" },
+    { $set: { transcriptionStatus: "wartend", transcriptionNextAttemptAt: at } },
+  );
+  log(`${ids.length} wegen vorübergehender Fehler beendete Aufträge wieder eingereiht.`);
+}
+
 async function main() {
   env("CLAWCORP_API_KEY");
   const client = await new MongoClient(env("MONGODB_URI"), { maxPoolSize: 5 }).connect();
@@ -639,7 +801,15 @@ async function main() {
     parts: database.collection("transcript_parts"),
     index: database.collection("transcript_index"),
     workers: database.collection<WorkerDoc>(WORKERS_COLLECTION),
+    limiter: database.collection<LimiterDoc>(LIMITER_COLLECTION),
   };
+  limiter = new GeminiLimiter(db.limiter, WORKER_ID, {
+    maxConcurrent: geminiConcurrency(),
+    minGapMs: geminiGapMs(),
+    leaseMs: GEMINI_TIMEOUT_MS + 60 * 1000,
+    log,
+  });
+  await requeueTransientFailures(db);
   const slots = concurrency();
   const startedAt = iso();
   await db.workers.updateOne(
@@ -654,6 +824,7 @@ async function main() {
         activeJobs: [],
         processed: 0,
         failed: 0,
+        deferred: 0,
       },
     },
     { upsert: true },
@@ -661,18 +832,28 @@ async function main() {
   const beat = setInterval(() => {
     writeHealth(db).catch((error) => log(`Lebenszeichen nicht geschrieben (${errorText(error)})`));
   }, HEARTBEAT_MS);
+  const rateLog = setInterval(() => {
+    limiter.summary().then((line) => log(`Drossel: ${line}`), () => undefined);
+  }, RATE_LOG_MS);
   const stopWatching = watchJobs(db);
-  log(`Dienst ${WORKER_ID} gestartet, ${slots} Plätze.`);
+  log(
+    `Dienst ${WORKER_ID} gestartet, ${slots} Plätze, Drossel ${limiter.options.maxConcurrent} gleichzeitig ` +
+      `(alle Instanzen), ${limiter.options.minGapMs / 1000} s Abstand.`,
+  );
 
   try {
     await Promise.all(Array.from({ length: slots }, (_, index) => slot(db, index)));
   } finally {
     clearInterval(beat);
+    clearInterval(rateLog);
     await stopWatching();
     await writeHealth(db, { stoppedAt: iso() }).catch(() => undefined);
     await client.close();
   }
-  log(`Dienst beendet, ${health.processed} Aufträge abgeschlossen, ${health.failed} fehlgeschlagen.`);
+  log(
+    `Dienst beendet, ${health.processed} Aufträge abgeschlossen, ${health.deferred} zurückgestellt, ` +
+      `${health.failed} fehlgeschlagen.`,
+  );
 }
 
 main().then(

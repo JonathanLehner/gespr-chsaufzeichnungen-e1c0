@@ -3,8 +3,9 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { listRecordings } from "@/lib/recordings";
+import { jobProgress, type JobProgress } from "@/lib/transcription";
 import { DEFAULT_SORT, parseSort } from "@/lib/recording-sort";
-import { cetDayStartUtcIso } from "@/lib/time";
+import { cetDayStartUtcIso, renderTimestamp } from "@/lib/time";
 import { RecordingsFilter, type FilterValues } from "@/components/recordings-filter";
 import { RecordingsTable, type TableRow } from "@/components/recordings-table";
 import { DEFAULT_TEMPLATE_EXAMPLE } from "@/lib/filename-template";
@@ -92,16 +93,19 @@ export default async function AufnahmenPage({
     values.loeschstatus !== "alle" ? values.loeschstatus : "",
   ].filter(Boolean).length;
 
-  // Beobachtet werden laufende Aufträge und fehlgeschlagene Aufträge, für die
-  // noch eine automatische Wiederholung aussteht.
+  const renderedAt = renderTimestamp();
+  const progress = await jobProgress(
+    result.rows.filter((row) => row.transcriptionStatus === "in_arbeit").map((row) => row._id),
+  );
+
+  // Beobachtet werden wartende und laufende Aufträge; „fehlgeschlagen“ ist endgültig.
   const watched: WatchedRecording[] = result.rows
-    .filter(
-      (row) =>
-        row.transcriptionStatus === "wartend" ||
-        row.transcriptionStatus === "in_arbeit" ||
-        (row.transcriptionStatus === "fehlgeschlagen" && !!row.transcriptionNextAttemptAt),
-    )
-    .map((row) => ({ id: row._id, status: row.transcriptionStatus }));
+    .filter((row) => row.transcriptionStatus === "wartend" || row.transcriptionStatus === "in_arbeit")
+    .map((row) => ({
+      id: row._id,
+      status: row.transcriptionStatus,
+      progressDone: progress.get(row._id)?.progressDone ?? null,
+    }));
 
   if (result.totalAll === 0) {
     return (
@@ -162,10 +166,11 @@ export default async function AufnahmenPage({
       <TranscriptionWatcher entries={watched} />
 
       <RecordingsTable
-        rows={result.rows.map(toTableRow)}
+        rows={result.rows.map((row) => toTableRow(row, progress.get(row._id)))}
         sortKey={values.sort}
         sortDir={values.dir}
         query={values.q}
+        renderedAt={renderedAt}
       />
 
       {result.pageCount > 1 && (
@@ -214,8 +219,21 @@ export default async function AufnahmenPage({
 }
 
 /** Nur die Felder, die die Tabelle anzeigt, gehen an den Client. */
-function toTableRow(row: Awaited<ReturnType<typeof listRecordings>>["rows"][number]): TableRow {
+function toTableRow(
+  row: Awaited<ReturnType<typeof listRecordings>>["rows"][number],
+  progress: JobProgress | undefined,
+): TableRow {
   return {
+    transcriptionTiming: {
+      status: row.transcriptionStatus,
+      queuedAt: row.uploadedAt,
+      nextAttemptAt: row.transcriptionNextAttemptAt ?? null,
+      finishedAt: row.transcriptionFinishedAt,
+      attempts: row.transcriptionAttempts ?? 0,
+      progressDone: progress?.progressDone ?? null,
+      progressTotal: progress?.progressTotal ?? null,
+      updatedAt: progress?.updatedAt ?? row.transcriptionStartedAt,
+    },
     _id: row._id,
     callAtUtc: row.callAtUtc,
     originalFilename: row.originalFilename,

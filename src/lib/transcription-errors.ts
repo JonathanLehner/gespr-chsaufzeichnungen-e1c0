@@ -14,7 +14,17 @@ export type TranscriptionFailure = {
   technical: string | null;
 };
 
+/**
+ * Endgültige Fehler formuliert der Transkriptionsdienst bereits als Satz, der
+ * genau sagt, was mit der Datei nicht stimmt. Sie werden unverändert gezeigt.
+ */
+const PERMANENT = /^(Die Audiodatei|Die Adresse der Audiodatei|Die Aufnahme wurde gelöscht)/;
+
 const RULES: { test: RegExp; message: string }[] = [
+  {
+    test: /spending limit|billing/i,
+    message: "Das Kostenlimit des Transkriptionsdienstes ist erreicht.",
+  },
   {
     test: /\b(408|504|522|524)\b|zeit(überschreitung|limit)|timeout|timed out|etimedout|deadline exceeded|aborted/i,
     message: "Der Transkriptionsdienst hat nicht rechtzeitig geantwortet.",
@@ -55,19 +65,14 @@ const FALLBACK = "Die Transkription konnte nicht abgeschlossen werden.";
 export function describeTranscriptionError(raw: string | null | undefined): TranscriptionFailure {
   const technical = (raw ?? "").trim();
   if (!technical) return { message: FALLBACK, technical: null };
+  if (PERMANENT.test(technical)) return { message: technical, technical: null };
 
   const rule = RULES.find((entry) => entry.test.test(technical));
   const message = rule?.message ?? FALLBACK;
   return { message, technical: technical === message ? null : technical };
 }
 
-/**
- * Kurzer Hinweis darauf, wie es mit dem Auftrag weitergeht. `nextAttemptLabel`
- * ist der bereits formatierte Zeitpunkt der nächsten automatischen
- * Wiederholung, oder `null`, wenn keine mehr aussteht.
- */
-export function retryHint(nextAttemptLabel: string | null | undefined): string {
-  return nextAttemptLabel
-    ? `Das System versucht es automatisch erneut, frühestens am ${nextAttemptLabel} Uhr. Sie können die Transkription auch sofort neu starten.`
-    : "Die automatischen Wiederholungen sind ausgeschöpft. Sie können die Transkription jederzeit selbst neu starten.";
+/** Hinweis bei einem endgültigen Fehler: Ein automatischer Versuch würde nichts ändern. */
+export function retryHint(): string {
+  return "Ein erneuter automatischer Versuch würde daran nichts ändern. Prüfen Sie die Datei und laden Sie sie gegebenenfalls neu hoch.";
 }

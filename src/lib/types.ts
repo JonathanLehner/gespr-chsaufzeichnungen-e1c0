@@ -144,7 +144,7 @@ export type Job = {
   startedAt: string | null;
   finishedAt: string | null;
   lockedAt: string | null;
-  /** Fälligkeit der nächsten automatischen Wiederholung, `null` wenn keine mehr aussteht. */
+  /** Nächster Versuch eines wartenden Auftrags nach einer Störung; `null` = sofort fällig. */
   nextAttemptAt: string | null;
   originalFilename: string;
 };

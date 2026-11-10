@@ -81,9 +81,11 @@ export const FIND_LIMIT = 100;
 export async function findMany<T>(
   collection: string,
   filter: Record<string, unknown> = {},
-  options: { limit?: number } = {},
+  options: { limit?: number; projection?: Record<string, 0 | 1> } = {},
 ): Promise<WithId<T>[]> {
-  const cursor = (await collectionOf(collection)).find(filter as Filter<StoredDoc>);
+  const cursor = (await collectionOf(collection)).find(filter as Filter<StoredDoc>, {
+    projection: options.projection,
+  });
   if (options.limit) cursor.limit(options.limit);
   return (await cursor.toArray()) as unknown as WithId<T>[];
 }
