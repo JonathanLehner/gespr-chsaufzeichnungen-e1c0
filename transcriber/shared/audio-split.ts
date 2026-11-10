@@ -285,3 +285,51 @@ export function splitAudio(
   if (!chunks || chunks.length === 0) return null;
   return chunks;
 }
+
+/**
+ * Verlustfreier Ausschnitt `startMs`–`endMs` der Originaldatei (gemini-3.5-transcribe
+ * mit „Originalaudio senden“): WAV (PCM/Float) blockgenau mit neuem Kopf, MP3 an
+ * Frame-Grenzen. Deckt der Ausschnitt die ganze Aufnahme ab, kommen die Bytes
+ * unverändert zurück. `startMs` ist der tatsächliche Beginn (MP3: Frame-Beginn).
+ * `null`, wenn das Format nicht verlustfrei geschnitten werden kann.
+ */
+export function sliceOriginal(
+  bytes: Uint8Array,
+  mime: AudioMime,
+  bounds: { startMs: number; endMs: number },
+  whole: boolean,
+): { bytes: Uint8Array; startMs: number } | null {
+  if (whole) return { bytes, startMs: 0 };
+  if (mime === "audio/wav") {
+    const layout = parseWavLayout(bytes);
+    if (!layout || (layout.audioFormat !== 1 && layout.audioFormat !== 3)) return null;
+    const align = Math.max(layout.blockAlign, 1);
+    const at = (ms: number) =>
+      Math.min(Math.floor(((ms / 1000) * layout.byteRate) / align) * align, layout.dataLength);
+    const from = at(bounds.startMs);
+    const to = at(bounds.endMs);
+    if (to <= from) return null;
+    return { bytes: wavSlice(bytes, layout, from, to), startMs: Math.round((from / layout.byteRate) * 1000) };
+  }
+  const frames = mp3Frames(bytes);
+  if (frames.length === 0) return null;
+  let position = 0;
+  let from = -1;
+  let to = -1;
+  let startMs = 0;
+  for (const frame of frames) {
+    const frameEnd = position + frame.durationMs;
+    // Frame gehört zum Ausschnitt, wenn seine Mitte darin liegt.
+    const middle = position + frame.durationMs / 2;
+    if (middle >= bounds.startMs && middle < bounds.endMs) {
+      if (from < 0) {
+        from = frame.offset;
+        startMs = position;
+      }
+      to = frame.offset + frame.length;
+    }
+    position = frameEnd;
+  }
+  if (from < 0 || to <= from) return null;
+  return { bytes: bytes.slice(from, to), startMs: Math.round(startMs) };
+}

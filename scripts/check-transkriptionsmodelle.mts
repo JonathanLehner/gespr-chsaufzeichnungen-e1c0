@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { claimJob } from "../transcriber/claim";
+import { parseWavLayout, sliceOriginal } from "../transcriber/shared/audio-split";
 import { boundsAtPauses, fixedBounds } from "../transcriber/shared/chunk-bounds";
 import { isSpendingLimitError } from "../transcriber/shared/queue";
 import { correctVocabulary, foldForMatch } from "../transcriber/shared/vocabulary-correction";
@@ -211,4 +212,24 @@ test("Übernahme: nachrangige Aufträge erst, wenn kein anderer fällig ist, und
     null,
   );
   assert.equal(calls.length, 2);
+});
+
+test("Originalaudio: WAV-Ausschnitt verlustfrei, ganze Datei unverändert", () => {
+  // 8 kHz, 16 bit, mono, 10 s: Bytes zählen hoch, damit der Ausschnitt prüfbar ist.
+  const rate = 8000, data = rate * 2 * 10;
+  const wav = new Uint8Array(44 + data);
+  const view = new DataView(wav.buffer);
+  const put = (at: number, text: string) => [...text].forEach((c, i) => (wav[at + i] = c.charCodeAt(0)));
+  put(0, "RIFF"); view.setUint32(4, 36 + data, true); put(8, "WAVE"); put(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  put(36, "data"); view.setUint32(40, data, true);
+  for (let i = 0; i < data; i += 1) wav[44 + i] = i % 251;
+  assert.equal(sliceOriginal(wav, "audio/wav", { startMs: 0, endMs: 10_000 }, true)?.bytes, wav);
+  const part = sliceOriginal(wav, "audio/wav", { startMs: 2500, endMs: 7000 }, false)!;
+  assert.equal(part.startMs, 2500);
+  const layout = parseWavLayout(part.bytes)!;
+  assert.equal(layout.sampleRate, rate);
+  assert.equal(layout.durationMs, 4500);
+  assert.deepEqual(part.bytes.subarray(44, 54), wav.subarray(44 + 40_000, 44 + 40_010));
 });
