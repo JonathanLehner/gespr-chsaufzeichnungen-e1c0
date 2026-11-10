@@ -115,6 +115,7 @@ import {
   TRANSCRIPT_RESPONSE_SCHEMA,
   buildTranscriptIndex,
   chunkPrompt,
+  chunkContext,
   mergeChunks,
   normalizeTranscript,
   parseJsonLoosely,
@@ -591,7 +592,76 @@ function speechRegions(bytes: Uint8Array, mime: AudioMime) {
 
 type ChunkAnswer = { transcript: NormalizedTranscript; usage: TokenUsage; modelVersion: string | null; corrections?: number };
 
-/** Flash-Modelle über den Plattform-Endpunkt, Antwort an `responseSchema` gebunden. */
+/** Prompt-Modelle mit eigenem Schlüssel direkt bei Google (`generateContent`, REST). */
+async function requestPromptDirect(
+  model: TranscriptionModel,
+  prompt: string,
+  audioBase64: string,
+  signal: AbortSignal,
+): Promise<ChunkAnswer> {
+  let res: Response;
+  try {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model.id}:generateContent`, {
+      method: "POST",
+      headers: { "x-goog-api-key": env("GEMINI_API_KEY"), "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          { role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "audio/ogg", data: audioBase64 } }] },
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: TRANSCRIPT_RESPONSE_SCHEMA,
+          temperature: 0,
+          ...model.generationConfig,
+        },
+      }),
+      signal: AbortSignal.any([AbortSignal.timeout(GEMINI_TIMEOUT_MS), signal]),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error(`Gemini API: Zeitüberschreitung nach ${GEMINI_TIMEOUT_MS / 1000} s.`);
+    }
+    throw new Error(`Gemini API: Netzwerkfehler (${errorText(error)}).`);
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let message = text.slice(0, 500);
+    try {
+      message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? message;
+    } catch {
+      /* Rohtext verwenden */
+    }
+    const failure = `Gemini API fehlgeschlagen (${res.status}): ${message.slice(0, 400)}`;
+    if (isSpendingLimitError(message)) throw new SpendingLimitError(failure);
+    if ([400, 413, 415, 422].includes(res.status) && !isTransientError(message)) throw new ContentError(failure);
+    // 401/403 (Schlüssel), 404, 429, 5xx: vorübergehend, der Auftrag wird zurückgestellt.
+    throw new Error(failure);
+  }
+  type Body = {
+    candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] } }[];
+    usageMetadata?: Parameters<typeof usageFromMetadata>[0];
+    modelVersion?: string;
+  };
+  let body: Body;
+  try {
+    body = JSON.parse(text) as Body;
+  } catch (error) {
+    throw new ContentError(`Gemini API: unlesbare Antwort (${errorText(error)})`);
+  }
+  const usage = usageFromMetadata(body.usageMetadata);
+  const modelVersion = body.modelVersion ?? null;
+  const answer = (body.candidates?.[0]?.content?.parts ?? [])
+    .filter((part) => !part.thought)
+    .map((part) => part.text ?? "")
+    .join("");
+  try {
+    return { transcript: normalizeTranscript(parseJsonLoosely(answer)), usage, modelVersion };
+  } catch (error) {
+    throw Object.assign(new InvalidReplyError(`Ungültiges JSON vom Modell: ${errorText(error)}`), { usage, modelVersion });
+  }
+}
+
+/** Prompt-Modelle, Antwort an `responseSchema` gebunden: direkt bei Google oder über den Plattform-Endpunkt. */
 async function requestTranscript(
   model: TranscriptionModel,
   prompt: string,
@@ -599,6 +669,7 @@ async function requestTranscript(
   signal: AbortSignal,
 ): Promise<ChunkAnswer> {
   if (model.path !== "prompt") throw new PermanentError(`Das Modell ${model.id} ist nicht verfügbar.`);
+  if (model.route === "direkt") return requestPromptDirect(model, prompt, audioBase64, signal);
   let res: Response;
   try {
     res = await fetch(geminiUrl(), {
@@ -962,7 +1033,8 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const measuredMs = await probeAudio(file);
     const durationMs = measuredMs ?? recording.durationMs ?? CHUNK_MS;
     const { model, vocabulary } = await readTranscriptionConfig(db, before.model);
-    const direct = model.route === "direkt";
+    // gemini-3.5-transcribe (Transcribe-API); Prompt-Modelle gehen über `requestTranscript`.
+    const direct = model.path === "transkription";
     const mime = recording.mimeType as AudioMime;
     // gemini-3.5-transcribe: lange Abschnitte, in einer Pause geschnitten; Flash: feste Minute.
     const bounds = direct
@@ -1007,7 +1079,9 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
         const index = pending[next++];
         const chunk = bounds[index];
         const startMs = chunk.startMs;
-        const prompt = (chunkCount === 1 ? PROMPT : chunkPrompt(index, chunkCount)) + vocabularyText;
+        // Prompt-Modelle laufen der Reihe nach und erhalten die Sprecher des vorigen Abschnitts.
+        const context = direct || index === 0 ? null : chunkContext(state.chunks[index - 1]);
+        const prompt = (chunkCount === 1 ? PROMPT : chunkPrompt(index, chunkCount, context)) + vocabularyText;
         let result: NormalizedTranscript | null = null;
         let transientError: string | null = null;
         let invalid = 0;
@@ -1078,7 +1152,9 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
         await bumpStatusVersion(db);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, pending.length) }, chunkWorker));
+    // Prompt-Modelle nacheinander, damit jeder Abschnitt die Sprecher des vorigen kennt.
+    const concurrency = direct ? CHUNK_CONCURRENCY : 1;
+    await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, chunkWorker));
     if (lost) throw new LockLost();
     if (stopping) return await pause();
     if (haltedBy) return await requeueHalted(haltedBy);

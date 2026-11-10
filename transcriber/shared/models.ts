@@ -8,6 +8,8 @@
  */
 
 export type TranscriptionModelId =
+  | "gemini-4-argon"
+  | "gemini-3.8-flash"
   | "gemini-3.5-transcribe"
   | "gemini-3.5-flash-lite"
   | "gemini-2.5-flash-lite"
@@ -37,13 +39,43 @@ export type TranscriptionModel = {
   generationConfig: Record<string, unknown>;
   /** Kann derzeit genutzt werden (bei `direct` nur mit `GEMINI_API_KEY`, siehe `isAvailable`). */
   available: boolean;
-  /** `direkt`: Googles Gemini API mit eigenem Schlüssel; `plattform`: ClawCorp-Endpunkt `/gemini`. */
+  /**
+   * `direkt`: Googles Gemini API mit eigenem Schlüssel (`GEMINI_API_KEY`);
+   * `plattform`: ClawCorp-Endpunkt `/gemini`. Ob Prompt oder Transcribe-API,
+   * bestimmt `path`.
+   */
   route: "direkt" | "plattform";
   /** Kurzer Hinweis im Dashboard, wenn nicht verfügbar oder bald umgeleitet. */
   note: string | null;
 };
 
 export const TRANSCRIPTION_MODELS: readonly TranscriptionModel[] = [
+  {
+    id: "gemini-4-argon",
+    path: "prompt",
+    timing: "schaetzung",
+    // Bis 30.11.2026; ab 1.12.2026 $4 / $20.
+    price: { audioInput: 2.0, textInput: 2.0, output: 10.0 },
+    // Gemessen am 10.11.2026 (11 Gespräche, 60-s-Abschnitte); argon denkt hier nicht.
+    perMinute: { audioInput: 1800, textInput: 1900, output: 950 },
+    generationConfig: { thinkingConfig: { thinkingLevel: "low" } },
+    available: true,
+    route: "direkt",
+    note: "Bestes Schweizerdeutsch im Vergleich vom 10.11.2026. Preis verdoppelt sich ab 1.12.2026.",
+  },
+  {
+    id: "gemini-3.8-flash",
+    path: "prompt",
+    timing: "schaetzung",
+    // Bis 31.12.2026; ab 1.1.2027 $1.50 / $7.50.
+    price: { audioInput: 0.75, textInput: 0.75, output: 3.75 },
+    // Ausgabe inkl. rund 230 Denk-Tokens je Minute (Denkstufe low).
+    perMinute: { audioInput: 1500, textInput: 1100, output: 1140 },
+    generationConfig: { thinkingConfig: { thinkingLevel: "low" } },
+    available: true,
+    route: "direkt",
+    note: "Günstiger; wechselte im Test vom 10.11.2026 gelegentlich ins Hochdeutsche und vergab Namen uneinheitlich.",
+  },
   {
     id: "gemini-3.5-transcribe",
     path: "transkription",
@@ -95,10 +127,13 @@ export const TRANSCRIPTION_MODELS: readonly TranscriptionModel[] = [
 ];
 
 /**
- * Standard für neue Transkripte. gemini-3.5-transcribe hat die Prüfung vom
- * 10.11.2026 nicht bestanden (siehe `docs/vergleich-transkription-2026-11-10.md`).
+ * Standard für neue Transkripte: gemini-4-argon (Denkstufe low) schreibt das
+ * Schweizerdeutsch am zuverlässigsten (siehe `docs/vergleich-modelle-2026-11-10.md`).
+ * Ohne `GEMINI_API_KEY` fällt die Auswahl auf gemini-3.5-flash-lite zurück.
  */
-export const DEFAULT_MODEL: TranscriptionModelId = "gemini-3.5-flash-lite";
+export const DEFAULT_MODEL: TranscriptionModelId = "gemini-4-argon";
+/** Rückfall, wenn der eigene Schlüssel fehlt (läuft über den Plattform-Endpunkt). */
+export const FALLBACK_MODEL: TranscriptionModelId = "gemini-3.5-flash-lite";
 /** Bisheriges Modell; damit sind alle Transkripte vor der Modellauswahl entstanden. Nur noch Bezeichnung. */
 export const LEGACY_MODEL: TranscriptionModelId = "gemini-2.5-flash";
 
@@ -121,7 +156,8 @@ export function availabilityNote(model: TranscriptionModel, directKey: boolean):
 export function resolveModel(id: string | null | undefined, directKey = false): TranscriptionModel {
   const chosen = findModel(id);
   if (chosen && isAvailable(chosen, directKey)) return chosen;
-  return findModel(DEFAULT_MODEL)!;
+  const standard = findModel(DEFAULT_MODEL)!;
+  return isAvailable(standard, directKey) ? standard : findModel(FALLBACK_MODEL)!;
 }
 
 /** Tokens einer oder mehrerer Anfragen, aufgeschlüsselt wie in `usageMetadata`. */

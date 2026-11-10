@@ -31,13 +31,16 @@ import {
 } from "../transcriber/shared/models";
 import { offsetToMs, segmentsFromWords } from "../transcriber/shared/word-timestamps";
 
-test("Standard ist gemini-3.5-flash-lite; gemini-2.5-flash ist abgelöst und fällt darauf zurück", () => {
-  assert.equal(DEFAULT_MODEL, "gemini-3.5-flash-lite");
+test("Standard ist gemini-4-argon; ohne eigenen Schlüssel gemini-3.5-flash-lite", () => {
+  assert.equal(DEFAULT_MODEL, "gemini-4-argon");
+  assert.equal(resolveModel(null, true).id, "gemini-4-argon");
   assert.equal(resolveModel(null).id, "gemini-3.5-flash-lite");
-  assert.equal(resolveModel("gibt-es-nicht").id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel("gibt-es-nicht", true).id, "gemini-4-argon");
   assert.equal(findModel(LEGACY_MODEL)?.available, false);
-  assert.equal(resolveModel(LEGACY_MODEL, true).id, "gemini-3.5-flash-lite");
-  assert.equal(resolveModel("gemini-2.5-flash-lite", true).id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel(LEGACY_MODEL, true).id, "gemini-4-argon");
+  assert.equal(resolveModel("gemini-2.5-flash-lite", false).id, "gemini-3.5-flash-lite");
+  assert.equal(resolveModel("gemini-3.8-flash", true).id, "gemini-3.8-flash");
+  assert.equal(resolveModel("gemini-3.8-flash", false).id, "gemini-3.5-flash-lite");
 });
 
 test("gemini-3.5-transcribe nur mit eigenem Schlüssel", () => {
@@ -118,7 +121,7 @@ test("Flash-Modelle denken nicht oder nur minimal", () => {
   for (const model of TRANSCRIPTION_MODELS.filter((entry) => entry.path === "prompt")) {
     const thinking = model.generationConfig.thinkingConfig as Record<string, unknown> | undefined;
     assert.ok(thinking, model.id);
-    assert.ok(thinking.thinkingBudget === 0 || thinking.thinkingLevel === "minimal", model.id);
+    assert.ok(thinking.thinkingBudget === 0 || ["minimal", "low"].includes(thinking.thinkingLevel as string), model.id);
   }
 });
 
@@ -143,7 +146,7 @@ test("usageMetadata trennt Audio, Text, Ausgabe und Denken; Kosten zählen Denke
 test("geschätzte Kosten je Minute liegen im erwarteten Bereich", () => {
   for (const model of TRANSCRIPTION_MODELS) {
     const perMinute = estimatedCostPerMinute(model);
-    assert.ok(perMinute > 0.0005 && perMinute < 0.02, `${model.id}: ${perMinute}`);
+    assert.ok(perMinute > 0.0005 && perMinute < 0.04, `${model.id}: ${perMinute}`);
   }
   // Gemessen am 10.11.2026: rund $0.0045 je Minute.
   assert.ok(Math.abs(estimatedCostPerMinute(findModel("gemini-3.5-transcribe")!) - 0.0048) < 0.001);
@@ -232,4 +235,26 @@ test("Originalaudio: WAV-Ausschnitt verlustfrei, ganze Datei unverändert", () =
   assert.equal(layout.sampleRate, rate);
   assert.equal(layout.durationMs, 4500);
   assert.deepEqual(part.bytes.subarray(44, 54), wav.subarray(44 + 40_000, 44 + 40_010));
+});
+
+test("Prompt verlangt Schweizerdeutsch; Abschnitte erhalten die Sprecher des vorigen", async () => {
+  const { PROMPT, chunkPrompt, chunkContext } = await import("../transcriber/shared/transcript");
+  assert.match(PROMPT, /IN SCHWEIZERDEUTSCH/);
+  assert.doesNotMatch(PROMPT, /Standardsprache wiedergegeben|Bachmann|Samir/);
+  assert.equal(chunkContext(null), null);
+  const previous = {
+    segments: [
+      { speaker: "S1", speakerLabel: "Frau Wälti", startMs: 0, endMs: 1000, sentences: [{ text: "Ja, da isch Wälti.", startMs: 0, endMs: 1000, words: [] }] },
+      { speaker: "S2", speakerLabel: "Labruzzo", startMs: 1000, endMs: 2000, sentences: [{ text: "Grüess Sie.", startMs: 1000, endMs: 2000, words: [] }] },
+    ],
+    speakerLabels: ["Frau Wälti", "Labruzzo"],
+    wordCount: 6,
+    endMs: 2000,
+  };
+  const context = chunkContext(previous)!;
+  assert.deepEqual(context.labels, ["Frau Wälti", "Labruzzo"]);
+  const prompt = chunkPrompt(1, 3, context);
+  assert.match(prompt, /"Frau Wälti", "Labruzzo"/);
+  assert.match(prompt, /Labruzzo: Grüess Sie\./);
+  assert.doesNotMatch(chunkPrompt(1, 3), /vorigen Abschnitt/);
 });

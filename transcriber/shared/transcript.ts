@@ -17,43 +17,70 @@ export const MAX_PART_BYTES = 350 * 1024; // Grenze des Datenbank-Endpunkts ist 
  * Satz zwei Zahlen, halten das Modell aber dazu an, die Aufnahme der Reihe nach
  * durchzuhören, statt sie zusammenzufassen.
  */
-export const PROMPT = `Du bist ein professioneller Transkriptionsdienst für deutschsprachige Verkaufsgespräche einer Immobilienfirma.
+export const PROMPT = `Du transkribierst Telefongespräche der Immotrust AG, einer Immobilienfirma aus Zürich. Ein Mitarbeiter ruft Liegenschaftsbesitzer in der Deutschschweiz an und fragt, ob sie ihr Grundstück oder ihre Liegenschaft verkaufen möchten. Fast alle sprechen Schweizerdeutsch, meist Zürichdeutsch.
 
-Aufgabe: Transkribiere die beigefügte Audioaufnahme vollständig und wortgetreu auf Deutsch.
+Aufgabe: Transkribiere die beigefügte Audioaufnahme vollständig und wortgetreu IN SCHWEIZERDEUTSCH, so wie gesprochen.
 
 Regeln:
-- Ausgabesprache ist immer Deutsch, unabhängig von Dialekt oder Akzent. Schweizerdeutsche Passagen werden in deutscher Standardsprache wiedergegeben.
+- Übersetze NICHT ins Hochdeutsche. Schreib die Mundart so, wie man sie in der Schweiz schreibt (z. B. "Grüezi", "Ja, grüess Sie", "das isch de Labruzzo vo de Firma Immotrust", "mir lueged grad", "Liegeschaft", "nimmt mi wunder", "hät", "gsi", "öppe", "chönd Sie").
+- Bleib über die ganze Aufnahme bei der Mundart. Nur wer tatsächlich Hochdeutsch spricht, wird hochdeutsch geschrieben.
+- Kein ß, immer ss.
+- Eigennamen, Orte und Strassen in ihrer offiziellen Schreibweise (z. B. Knonau, Schlieren, Oerlikon, Grundstrasse, Zürcherstrasse, Immotrust). Personennamen genau so, wie sie zu hören sind; im Zweifel die übliche Schweizer Schreibweise.
 - Trenne die Sprecher. Vergib stabile Kennungen S1, S2, S3 in der Reihenfolge des ersten Auftretens.
-- Wenn im Gespräch ein Name genannt wird, verwende ihn als Bezeichnung des Sprechers, sonst "Sprecher 1", "Sprecher 2".
+- Nennt sich jemand mit Namen oder wird so angesprochen, verwende den Namen als Bezeichnung des Sprechers (z. B. "Frau Muster"), sonst "Sprecher 1", "Sprecher 2". Verwende nur Namen, die in der Aufnahme tatsächlich fallen.
 - Gliedere jeden Sprecherbeitrag in einzelne Sätze.
 - Alle Zeitangaben in ganzen Millisekunden ab Beginn der Aufnahme, aufsteigend und ohne Überlappung.
 - Erfinde nichts. Unverständliche Stellen als [unverständlich] kennzeichnen.
 
 Antworte ausschliesslich mit JSON in genau dieser Struktur:
-{"speakers":[{"id":"S1","label":"Samir Weber"}],
- "segments":[{"speaker":"S1","startMs":0,"endMs":4200,
-   "sentences":[{"text":"Guten Tag Frau Bachmann.","startMs":0,"endMs":1600}]}]}
+{"speakers":[{"id":"S1","label":"Frau Muster"}],
+ "segments":[{"speaker":"S1","startMs":0,"endMs":2100,
+   "sentences":[{"text":"Grüezi mitenand.","startMs":0,"endMs":2100}]}]}
 
 Ist auf der Aufnahme nichts Gesprochenes zu hören – etwa nur Freizeichen, Besetztton, Rauschen oder Stille –, dann antworte mit {"speakers":[],"segments":[]}. Erfinde in diesem Fall keinen Text.`;
 
+/** Was aus dem vorigen Abschnitt bekannt ist: Sprecherbezeichnungen und die letzten Sätze. */
+export type ChunkContext = { labels: string[]; lastLines: { label: string; text: string }[] };
+
 /**
- * Zusatz für einen einzelnen Abschnitt. Der Dienst hört nur diesen Ausschnitt
- * und kennt weder das Gespräch davor noch danach; die Zeitangaben zählen
- * deshalb ab Beginn des Abschnitts und werden erst beim Zusammensetzen auf die
- * Gesprächszeit verschoben.
+ * Bezeichnungen und Schluss des vorigen Abschnitts. Damit vergibt das Modell
+ * im nächsten Abschnitt dieselben Namen statt neu „Sprecher 1/2“, und
+ * `mergeChunks` führt dieselbe Person über die Abschnitte zusammen.
+ */
+export function chunkContext(previous: NormalizedTranscript | null | undefined, lines = 4): ChunkContext | null {
+  if (!previous || previous.segments.length === 0) return null;
+  const all = previous.segments.flatMap((segment) =>
+    segment.sentences.map((sentence) => ({ label: segment.speakerLabel, text: sentence.text })),
+  );
+  return { labels: [...new Set(previous.segments.map((segment) => segment.speakerLabel))], lastLines: all.slice(-lines) };
+}
+
+/**
+ * Zusatz für einen einzelnen Abschnitt. Der Dienst hört nur diesen Ausschnitt;
+ * die Zeitangaben zählen deshalb ab Beginn des Abschnitts und werden erst beim
+ * Zusammensetzen auf die Gesprächszeit verschoben.
  *
  * Der Name aus den Metadaten wird bewusst nicht mitgegeben: In der Messung hat
  * das Modell ihn als Sprecherbezeichnung übernommen, auch wenn er im Abschnitt
- * gar nicht fiel. Namen sollen aus dem Gehörten stammen, nicht aus dem
- * Dateinamen.
+ * gar nicht fiel. Bekannt sind nur die Bezeichnungen, die das Modell selbst im
+ * vorigen Abschnitt aus dem Gehörten vergeben hat (`context`).
  */
-export function chunkPrompt(index: number, count: number): string {
-  return `${PROMPT}
+export function chunkPrompt(index: number, count: number, context: ChunkContext | null = null): string {
+  let text = `${PROMPT}
 
 Diese Audiodatei ist Abschnitt ${index + 1} von ${count} eines längeren Gesprächs.
 - Alle Zeitangaben zählen ab dem Beginn dieses Abschnitts, nicht ab dem Beginn des Gesprächs.
 - Der Abschnitt kann mitten in einem Satz beginnen und enden. Gib angefangene Sätze so wieder, wie sie zu hören sind, und ergänze nichts.
 - Verwende für dieselbe Person durchgehend dieselbe Bezeichnung.`;
+  if (context && context.labels.length > 0) {
+    text += `
+
+Im vorigen Abschnitt sind diese Sprecher vorgekommen: ${context.labels.map((label) => `"${label}"`).join(", ")}.
+Er endete so:
+${context.lastLines.map((line) => `${line.label}: ${line.text}`).join("\n")}
+Spricht dieselbe Person weiter, verwende genau dieselbe Bezeichnung wie oben, auch wenn ihr Name in diesem Abschnitt nicht fällt. Ordne die Stimmen anhand des Gesprächsverlaufs zu (wer anruft, wer angerufen wird). Neue Bezeichnungen nur für Personen, die neu dazukommen. Die Sätze oben gehören nicht zu diesem Abschnitt; schreib sie nicht noch einmal.`;
+  }
+  return text;
 }
 
 /**
