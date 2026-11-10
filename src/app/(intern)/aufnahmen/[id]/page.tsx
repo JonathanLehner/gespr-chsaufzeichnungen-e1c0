@@ -13,7 +13,9 @@ import { CommentsPanel } from "@/components/comments-panel";
 import { RatingPanel } from "@/components/rating-panel";
 import { DeletionFlagButton } from "@/components/deletion-flag";
 import { TranscriptionStatusLine } from "@/components/transcription-status-line";
-import type { Job } from "@/lib/types";
+import type { Job, TranscriptMeta } from "@/lib/types";
+import { transcriptMetaOf } from "@/lib/transcription-models";
+import { TIMING_LABELS, formatUsd } from "../../../../../transcriber/shared/models";
 
 export async function generateMetadata({
   params,
@@ -134,6 +136,34 @@ export default async function AufnahmeDetailPage({
       ? ([["Nächster automatischer Versuch", `${nextAttemptLabel} Uhr`]] as [string, React.ReactNode][])
       : []),
     ["Versuche", String(attempts)],
+    ...transcriptRows(recording.transcriptionStatus === "abgeschlossen" ? transcriptMetaOf(recording) : null, user.isAdmin),
+    ...(job?.background && (job.status === "wartend" || job.status === "in_arbeit")
+      ? ([
+          [
+            job.kind === "neu_ausrichten" ? "Neu-Ausrichtung" : "Neu-Transkription",
+            `${job.status === "in_arbeit" ? "Läuft" : "Wartet"}${job.model ? ` · ${job.model}` : ""}`,
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
+    ...((recording.transcriptHistory?.length ?? 0) > 0
+      ? ([
+          [
+            "Frühere Fassungen",
+            <details key="h">
+              <summary className="cursor-pointer">{recording.transcriptHistory!.length}</summary>
+              <ul className="mt-1 space-y-0.5 text-[12px] text-ink-soft">
+                {[...recording.transcriptHistory!].reverse().map((entry, index) => (
+                  <li key={`${entry.at}-${index}`}>
+                    <span className="font-mono">{entry.model}</span> · {TIMING_LABELS[entry.timing]}
+                    {entry.at && !entry.at.startsWith("1970") ? ` · ${formatDateTimeWithSeconds(entry.at)}` : ""}
+                    {user.isAdmin && entry.costUsd !== null ? ` · ${formatUsd(entry.costUsd)}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </details>,
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
     [
       "Sprecher / Wörter",
       recording.speakerCount
@@ -245,4 +275,32 @@ export default async function AufnahmeDetailPage({
       </div>
     </div>
   );
+}
+
+/** Herkunft des Transkripts; Tokens und Kosten nur für Admins. */
+function transcriptRows(meta: TranscriptMeta | null, isAdmin: boolean): [string, React.ReactNode][] {
+  if (!meta) return [];
+  const rows: [string, React.ReactNode][] = [
+    [
+      "Transkriptionsmodell",
+      <span key="m" className="font-mono text-[12px]">
+        {meta.model}
+        {meta.modelVersion && meta.modelVersion !== meta.model ? ` (${meta.modelVersion})` : ""}
+      </span>,
+    ],
+    ["Wortzeiten", TIMING_LABELS[meta.timing]],
+  ];
+  if (meta.at && !meta.at.startsWith("1970")) rows.push(["Transkriptionsdatum", formatDateTimeWithSeconds(meta.at)]);
+  if (meta.retimedAt) rows.push(["Neu ausgerichtet", formatDateTimeWithSeconds(meta.retimedAt)]);
+  if (isAdmin) {
+    const usage = meta.usage;
+    rows.push([
+      "Tokens Ein / Aus / Denken",
+      usage
+        ? `${(usage.audioInput + usage.textInput).toLocaleString("de-CH")} / ${usage.output.toLocaleString("de-CH")} / ${usage.thinking.toLocaleString("de-CH")}`
+        : "Nicht erfasst",
+    ]);
+    rows.push(["Kosten", meta.costUsd === null ? "Nicht erfasst" : formatUsd(meta.costUsd)]);
+  }
+  return rows;
 }

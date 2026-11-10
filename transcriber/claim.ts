@@ -25,7 +25,7 @@ type JobCollection<T> = {
  */
 export async function claimJob<T>(
   jobs: JobCollection<T>,
-  options: { lockId: string; workerId: string; newestFirst: boolean; now?: number },
+  options: { lockId: string; workerId: string; newestFirst: boolean; allowBackground?: boolean; now?: number },
 ): Promise<T | null> {
   const now = options.now ?? Date.now();
   const lock = {
@@ -36,8 +36,14 @@ export async function claimJob<T>(
     returnDocument: "before",
   });
   if (reclaimed) return reclaimed;
-  return jobs.findOneAndUpdate(claimableFilter(now), lock, {
+  // Nachrangige Neu-Transkriptionen (`background`) erst, wenn kein anderer Auftrag fällig ist.
+  const regular = await jobs.findOneAndUpdate({ $and: [claimableFilter(now), { background: { $ne: true } }] }, lock, {
     sort: { priority: -1, createdAt: options.newestFirst ? -1 : 1 },
+    returnDocument: "before",
+  });
+  if (regular || options.allowBackground === false) return regular;
+  return jobs.findOneAndUpdate({ $and: [claimableFilter(now), { background: true }] }, lock, {
+    sort: { priority: -1, createdAt: 1 },
     returnDocument: "before",
   });
 }

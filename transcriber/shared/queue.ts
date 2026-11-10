@@ -17,6 +17,13 @@ export const HEARTBEAT_MS = 30 * 1000;
 export const STALE_LOCK_MS = 3 * 60 * 1000;
 /** Sammlung, in der jeder laufende Dienst sein Lebenszeichen ablegt. */
 export const WORKERS_COLLECTION = "transcriber_workers";
+/**
+ * Fähigkeiten, die ein Dienst in seinem Lebenszeichen meldet. Nachrangige
+ * Neu-Transkriptionen, Neu-Ausrichtung und das Modell je Auftrag versteht nur
+ * ein Dienst mit diesen Einträgen; eine ältere Instanz würde solche Aufträge
+ * wie gewöhnliche behandeln.
+ */
+export const REQUIRED_WORKER_FEATURES = ["nachrangig", "modell-je-auftrag", "neu-ausrichten"] as const;
 
 export const iso = (ms = Date.now()) => new Date(ms).toISOString();
 

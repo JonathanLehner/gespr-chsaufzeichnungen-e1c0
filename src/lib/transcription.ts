@@ -102,8 +102,12 @@ export async function realignRecording(
   };
 }
 
-/** Setzt einen Auftrag auf „wartend“ zurück und gibt alle Versuche wieder frei. */
-export async function resetJob(recordingId: string): Promise<void> {
+/**
+ * Setzt einen Auftrag auf „wartend“ zurück und gibt alle Versuche wieder frei.
+ * Eine nachrangige Neu-Transkription (`background`) bleibt nachrangig und lässt
+ * die Aufnahme samt bisherigem Transkript unverändert.
+ */
+export async function resetJob(recordingId: string, options: { background?: boolean } = {}): Promise<void> {
   await updateOne(
     Collections.jobs,
     { _id: recordingId },
@@ -130,9 +134,14 @@ export async function resetJob(recordingId: string): Promise<void> {
         paused: null,
         permanent: null,
         staleClaims: 0,
+        ...(options.background ? {} : { background: null, kind: null, model: null }),
       },
     },
   );
+  if (options.background) {
+    await invalidateRecordingCache();
+    return;
+  }
   await updateOne(
     Collections.recordings,
     { _id: recordingId },
@@ -334,6 +343,8 @@ export type WorkerHealth = {
   processed: number;
   failed: number;
   deferred?: number;
+  /** Gemeldete Fähigkeiten (`REQUIRED_WORKER_FEATURES`); fehlt bei älteren Fassungen. */
+  features?: string[];
   /** Lebenszeichen innerhalb von drei Intervallen und nicht beendet. */
   alive: boolean;
 };
@@ -534,8 +545,8 @@ export async function retryJobNow(recordingId: string): Promise<RequeueResult> {
 
 /** Reiht alle fehlgeschlagenen Aufträge neu ein; liefert die Anzahl. */
 export async function requeueAllFailed(): Promise<number> {
-  const failed = await findMany<Job>(Collections.jobs, { status: "fehlgeschlagen" }, { projection: { _id: 1 } });
-  for (const job of failed) await resetJob(job._id);
+  const failed = await findMany<Job>(Collections.jobs, { status: "fehlgeschlagen" }, { projection: { _id: 1, background: 1 } });
+  for (const job of failed) await resetJob(job._id, { background: !!job.background });
   return failed.length;
 }
 
@@ -543,7 +554,7 @@ export async function requeueAllFailed(): Promise<number> {
 
 export type QueueJobRow = Pick<
   Job,
-  "_id" | "status" | "attempts" | "lastError" | "createdAt" | "startedAt" | "finishedAt" | "nextAttemptAt" | "originalFilename" | "priority"
+  "_id" | "status" | "attempts" | "lastError" | "createdAt" | "startedAt" | "finishedAt" | "nextAttemptAt" | "originalFilename" | "priority" | "model" | "kind" | "background"
 > & { progress: JobProgress };
 
 export type QueueOverview = {
@@ -570,7 +581,7 @@ export type QueueOverview = {
 const JOB_FIELDS = {
   ...PROGRESS_PROJECTION,
   status: 1, attempts: 1, lastError: 1, createdAt: 1, startedAt: 1, finishedAt: 1,
-  nextAttemptAt: 1, originalFilename: 1, priority: 1,
+  nextAttemptAt: 1, originalFilename: 1, priority: 1, model: 1, kind: 1, background: 1,
 } as const;
 
 type JobRowDoc = Omit<QueueJobRow, "progress"> & Partial<ProgressFields> & { lockedAt?: unknown };
@@ -587,6 +598,9 @@ function toJobRows(docs: JobRowDoc[]): QueueJobRow[] {
     nextAttemptAt: doc.nextAttemptAt,
     originalFilename: doc.originalFilename,
     priority: doc.priority,
+    model: doc.model ?? null,
+    kind: doc.kind ?? null,
+    background: doc.background ?? null,
     progress: toJobProgress(doc as unknown as ProgressDoc),
   }));
 }
@@ -597,7 +611,7 @@ export async function queueOverview(health: QueueHealth): Promise<QueueOverview>
   const [countList, waiting, nextAttempts, failed, recentlyFinished, oldest, doc, finishedLastHour] = await Promise.all([
     Promise.all(statuses.map((status) => countDocuments(Collections.jobs, { status }))),
     findMany<JobRowDoc>(Collections.jobs, { status: { $in: ["in_arbeit", "wartend"] } }, {
-      projection: JOB_FIELDS, sort: { status: 1, priority: -1, createdAt: 1 }, limit: 25,
+      projection: JOB_FIELDS, sort: { status: 1, background: 1, priority: -1, createdAt: 1 }, limit: 25,
     }),
     findMany<JobRowDoc>(Collections.jobs, { status: "wartend", nextAttemptAt: { $gt: now } }, {
       projection: JOB_FIELDS, sort: { nextAttemptAt: 1 }, limit: 10,

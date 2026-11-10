@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { getCurrentUser } from "@/lib/auth";
-import { formatDateTimeWithSeconds, renderTimestamp } from "@/lib/time";
+import { formatDateTimeWithSeconds, formatDuration, renderTimestamp } from "@/lib/time";
 import { haltText } from "@/lib/queue-halt";
 import { queueHealth, queueOverview, type QueueHealth, type QueueJobRow } from "@/lib/transcription";
 import { StatusBadge } from "@/components/status";
@@ -25,10 +25,40 @@ import {
   RequeueAllFailedButton,
 } from "@/components/queue-controls";
 import type { TranscriptionStatus } from "@/lib/types";
+import {
+  DEFAULT_MODEL,
+  TRANSCRIPTS_PAGE_SIZE,
+  TRANSCRIPT_SORTS,
+  actualCostPerMinute,
+  costByMonth,
+  getModelSettings,
+  listTranscripts,
+  type TranscriptSort,
+} from "@/lib/transcription-models";
+import {
+  TIMING_LABELS,
+  TRANSCRIPTION_MODELS,
+  estimatedCostPerMinute,
+  formatUsd,
+  type TimingMethod,
+} from "../../../../../transcriber/shared/models";
+import {
+  ModelSettingsForm,
+  RetranscribeForm,
+  VocabularyForm,
+  type ModelOption,
+} from "@/components/transcription-model-controls";
 
 export const metadata: Metadata = { title: "Transkription verwalten" };
 
-export default async function TranskriptionAdminPage() {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+function param(query: Record<string, string | string[] | undefined>, key: string): string {
+  const value = query[key];
+  return String((Array.isArray(value) ? value[0] : value) ?? "");
+}
+
+export default async function TranskriptionAdminPage({ searchParams }: { searchParams: SearchParams }) {
   const user = await getCurrentUser();
   if (!user?.isAdmin) {
     return (
@@ -46,8 +76,29 @@ export default async function TranskriptionAdminPage() {
     );
   }
 
+  const query = await searchParams;
+  const filterModel = TRANSCRIPTION_MODELS.some((model) => model.id === param(query, "modell")) ? param(query, "modell") : null;
+  const filterTiming = (["modell", "schaetzung"] as const).find((value) => value === param(query, "zeiten")) ?? null;
+  const sort: TranscriptSort = param(query, "sortierung") in TRANSCRIPT_SORTS ? (param(query, "sortierung") as TranscriptSort) : "datum";
+  const direction = param(query, "richtung") === "auf" ? 1 : -1;
+  const page = Math.max(1, Number.parseInt(param(query, "seite"), 10) || 1);
+
   const health = await queueHealth();
-  const overview = await queueOverview(health);
+  const [overview, modelSettings, actual, costs, transcripts] = await Promise.all([
+    queueOverview(health),
+    getModelSettings(),
+    actualCostPerMinute(),
+    costByMonth(),
+    listTranscripts({ model: filterModel, timing: filterTiming, sort, direction, page }),
+  ]);
+  const modelOptions: ModelOption[] = TRANSCRIPTION_MODELS.map((model) => ({
+    id: model.id,
+    available: model.available,
+    note: model.note,
+    timingLabel: TIMING_LABELS[model.timing],
+    estimatedPerMinute: formatUsd(estimatedCostPerMinute(model)),
+    actualPerMinute: actual.has(model.id) ? formatUsd(actual.get(model.id)) : null,
+  }));
   const now = renderTimestamp();
   const block = overview.spendingBlock;
   const pause = overview.manualPause;
@@ -256,6 +307,95 @@ export default async function TranskriptionAdminPage() {
           action={(job) => <JobActionButton recordingId={job._id} action="wiederholen" label="Erneut starten" />}
         />
       </section>
+
+      {/* Modell */}
+      <section className="card p-5" aria-labelledby="modell">
+        <h2 id="modell" className="text-[15px] font-semibold text-ink">
+          Transkriptionsmodell
+        </h2>
+        <p className="mt-1 text-[13px] text-ink-soft">
+          Gilt für neue Aufträge. Verwendet wird derzeit{" "}
+          <span className="font-mono text-[12.5px] text-ink">{modelSettings.effective}</span>.
+          {modelSettings.updatedBy && modelSettings.updatedAt
+            ? ` Zuletzt geändert von ${modelSettings.updatedBy} am ${formatDateTimeWithSeconds(modelSettings.updatedAt)}.`
+            : ""}
+        </p>
+        <ModelSettingsForm models={modelOptions} selected={modelSettings.effective} defaultId={DEFAULT_MODEL} />
+      </section>
+
+      {/* Vokabular */}
+      <section className="card p-5" aria-labelledby="vokabular">
+        <h2 id="vokabular" className="text-[15px] font-semibold text-ink">
+          Vokabular
+        </h2>
+        <p className="mt-1 text-[13px] text-ink-soft">
+          Namen und Begriffe in der richtigen Schreibweise, etwa Firmen-, Orts- und Strassennamen.
+        </p>
+        <VocabularyForm initial={modelSettings.vocabulary} stored={modelSettings.vocabularyStored} />
+      </section>
+
+      {/* Neu erstellen */}
+      <section className="card p-5" aria-labelledby="neu-erstellen">
+        <h2 id="neu-erstellen" className="text-[15px] font-semibold text-ink">
+          Bestehende Transkripte neu erstellen
+        </h2>
+        <RetranscribeForm models={modelOptions} defaultModel={modelSettings.effective} />
+      </section>
+
+      {/* Kosten */}
+      <section className="card p-5" aria-labelledby="kosten">
+        <h2 id="kosten" className="text-[15px] font-semibold text-ink">
+          Kosten
+        </h2>
+        {costs.length === 0 ? (
+          <p className="mt-2 text-[13px] text-ink-soft">Noch keine gemessenen Läufe.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse">
+              <thead className="bg-canvas">
+                <tr>
+                  <th className="th">Monat</th>
+                  <th className="th">Modell</th>
+                  <th className="th">Läufe</th>
+                  <th className="th">Audio</th>
+                  <th className="th">Tokens Ein / Aus / Denken</th>
+                  <th className="th">Kosten</th>
+                  <th className="th">Je Minute</th>
+                </tr>
+              </thead>
+              <tbody>
+                {costs.map((row) => (
+                  <tr key={`${row.month}-${row.model}`}>
+                    <td className="td tabular-nums">{row.month}</td>
+                    <td className="td font-mono text-[12px]">{row.model}</td>
+                    <td className="td tabular-nums">{row.runs.toLocaleString("de-CH")}</td>
+                    <td className="td tabular-nums">{Math.round(row.audioMinutes).toLocaleString("de-CH")} Min.</td>
+                    <td className="td text-[12px] tabular-nums">
+                      {(row.usage.audioInput + row.usage.textInput).toLocaleString("de-CH")} /{" "}
+                      {row.usage.output.toLocaleString("de-CH")} / {row.usage.thinking.toLocaleString("de-CH")}
+                    </td>
+                    <td className="td tabular-nums">{formatUsd(row.costUsd, 2)}</td>
+                    <td className="td tabular-nums">
+                      {row.audioMinutes > 0 ? formatUsd(row.costUsd / row.audioMinutes) : "–"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Transkripte */}
+      <TranscriptTable
+        rows={transcripts.rows}
+        total={transcripts.total}
+        page={page}
+        filterModel={filterModel}
+        filterTiming={filterTiming}
+        sort={sort}
+        direction={direction}
+      />
 
       {/* Grenzen */}
       <section className="card p-5" aria-labelledby="grenzen">
@@ -479,6 +619,14 @@ function JobTable({
                     {job.priority && job.status === "wartend" ? (
                       <span className="ml-1.5 badge bg-petrol-soft text-petrol">vorgezogen</span>
                     ) : null}
+                    {job.background ? (
+                      <span className="ml-1.5 badge bg-canvas text-ink-soft">
+                        {job.kind === "neu_ausrichten" ? "Neu ausrichten" : "Neu transkribieren"}
+                      </span>
+                    ) : null}
+                    {job.model ? (
+                      <span className="mt-0.5 block font-mono text-[11px] text-ink-faint">{job.model}</span>
+                    ) : null}
                   </td>
                   <td className="td">
                     <StatusBadge status={job.status} />
@@ -537,5 +685,148 @@ function RunningProgress({ job, now }: { job: QueueJobRow; now: number }) {
         {remaining !== null ? ` · ${formatRemaining(remaining)}` : ""}
       </span>
     </span>
+  );
+}
+
+type TranscriptTableProps = {
+  rows: Awaited<ReturnType<typeof listTranscripts>>["rows"];
+  total: number;
+  page: number;
+  filterModel: string | null;
+  filterTiming: TimingMethod | null;
+  sort: TranscriptSort;
+  direction: 1 | -1;
+};
+
+/** Abgeschlossene Transkripte mit Herkunft; Filter und Sortierung über die Adresse. */
+function TranscriptTable({ rows, total, page, filterModel, filterTiming, sort, direction }: TranscriptTableProps) {
+  const href = (patch: Record<string, string | null>) => {
+    const values: Record<string, string | null> = {
+      modell: filterModel,
+      zeiten: filterTiming,
+      sortierung: sort === "datum" ? null : sort,
+      richtung: direction === 1 ? "auf" : null,
+      seite: page > 1 ? String(page) : null,
+      ...patch,
+    };
+    const search = new URLSearchParams(
+      Object.entries(values).filter((entry): entry is [string, string] => !!entry[1]),
+    ).toString();
+    return `/admin/transkription${search ? `?${search}` : ""}#transkripte`;
+  };
+  const sortLink = (key: TranscriptSort, label: string) => {
+    const active = sort === key;
+    const next = active && direction === -1 ? "auf" : null;
+    return (
+      <Link
+        href={href({ sortierung: key === "datum" ? null : key, richtung: next, seite: null })}
+        className={`hover:text-petrol ${active ? "text-ink" : ""}`}
+        aria-sort={active ? (direction === 1 ? "ascending" : "descending") : undefined}
+      >
+        {label}
+        {active ? (direction === 1 ? " ↑" : " ↓") : ""}
+      </Link>
+    );
+  };
+  const pages = Math.max(1, Math.ceil(total / TRANSCRIPTS_PAGE_SIZE));
+  const chip = (active: boolean) =>
+    `badge ${active ? "bg-petrol text-white" : "bg-canvas text-ink-soft hover:text-petrol"}`;
+
+  return (
+    <section id="transkripte" className="card scroll-mt-20 p-5" aria-labelledby="transkripte-titel">
+      <h2 id="transkripte-titel" className="text-[15px] font-semibold text-ink">
+        Transkripte ({total.toLocaleString("de-CH")})
+      </h2>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[12px]">
+        <span className="mr-1 text-ink-soft">Modell</span>
+        <Link href={href({ modell: null, seite: null })} className={chip(!filterModel)}>
+          Alle
+        </Link>
+        {TRANSCRIPTION_MODELS.map((model) => (
+          <Link key={model.id} href={href({ modell: model.id, seite: null })} className={`${chip(filterModel === model.id)} font-mono`}>
+            {model.id}
+          </Link>
+        ))}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px]">
+        <span className="mr-1 text-ink-soft">Zeiten</span>
+        <Link href={href({ zeiten: null, seite: null })} className={chip(!filterTiming)}>
+          Alle
+        </Link>
+        {(Object.keys(TIMING_LABELS) as TimingMethod[]).map((key) => (
+          <Link key={key} href={href({ zeiten: key, seite: null })} className={chip(filterTiming === key)}>
+            {TIMING_LABELS[key]}
+          </Link>
+        ))}
+      </div>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-[13px] text-ink-soft">Keine Transkripte für diese Auswahl.</p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[900px] border-collapse">
+            <thead className="bg-canvas">
+              <tr>
+                <th className="th">Datei</th>
+                <th className="th">{sortLink("modell", "Modell")}</th>
+                <th className="th">Zeiten</th>
+                <th className="th">{sortLink("datum", "Transkribiert")}</th>
+                <th className="th">{sortLink("dauer", "Dauer")}</th>
+                <th className="th">Tokens Ein / Aus</th>
+                <th className="th">{sortLink("kosten", "Kosten")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const meta = row.transcript;
+                const tokensIn = meta?.usage ? meta.usage.audioInput + meta.usage.textInput : null;
+                return (
+                  <tr key={row._id}>
+                    <td className="td">
+                      <Link href={`/aufnahmen/${row._id}`} className="font-mono text-[11.5px] text-petrol hover:underline wrap-anywhere">
+                        {row.originalFilename}
+                      </Link>
+                      {row.historyCount > 0 && (
+                        <span className="mt-0.5 block text-[11.5px] text-ink-faint">
+                          {row.historyCount} {row.historyCount === 1 ? "frühere Fassung" : "frühere Fassungen"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="td font-mono text-[12px]">{meta?.model ?? "–"}</td>
+                    <td className="td text-[12px]">{meta ? TIMING_LABELS[meta.timing] : "–"}</td>
+                    <td className="td whitespace-nowrap text-[12px] tabular-nums">
+                      {meta?.at ? formatDateTimeWithSeconds(meta.at) : "–"}
+                    </td>
+                    <td className="td tabular-nums">{formatDuration(row.durationMs)}</td>
+                    <td className="td text-[12px] tabular-nums">
+                      {tokensIn !== null && meta?.usage
+                        ? `${tokensIn.toLocaleString("de-CH")} / ${(meta.usage.output + meta.usage.thinking).toLocaleString("de-CH")}`
+                        : "–"}
+                    </td>
+                    <td className="td tabular-nums">{formatUsd(meta?.costUsd)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {pages > 1 && (
+        <nav className="mt-3 flex items-center gap-3 text-[12.5px]" aria-label="Seiten">
+          {page > 1 ? (
+            <Link href={href({ seite: page - 1 > 1 ? String(page - 1) : null })} className="btn btn-ghost">
+              Zurück
+            </Link>
+          ) : null}
+          <span className="tabular-nums text-ink-soft">
+            Seite {page} von {pages}
+          </span>
+          {page < pages ? (
+            <Link href={href({ seite: String(page + 1) })} className="btn btn-ghost">
+              Weiter
+            </Link>
+          ) : null}
+        </nav>
+      )}
+    </section>
   );
 }

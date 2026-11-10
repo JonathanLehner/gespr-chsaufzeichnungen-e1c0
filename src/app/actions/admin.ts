@@ -23,6 +23,14 @@ import {
   setQueuePaused,
   type SettingsInput,
 } from "@/lib/transcription";
+import {
+  enqueueRetranscription,
+  planRetranscription,
+  saveModelSetting,
+  saveVocabulary,
+  type RetranscribeInput,
+  type RetranscribePlan,
+} from "@/lib/transcription-models";
 import type { Comment, User } from "@/lib/types";
 
 export type TemplatePreview = {
@@ -154,6 +162,44 @@ export async function requeueAllFailedAction(): Promise<ActionResult> {
     ok: true,
     message: count === 0 ? "Keine fehlgeschlagenen Aufträge." : `${count} ${count === 1 ? "Auftrag" : "Aufträge"} neu eingereiht.`,
   };
+}
+
+/* --------------------------------------------------------------- Transkriptionsmodell */
+
+export async function saveModelSettingAction(model: string): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  const result = await saveModelSetting(model, admin.email);
+  if (result.ok) revalidateQueue();
+  return result;
+}
+
+export async function saveVocabularyAction(text: string): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  const result = await saveVocabulary(text.slice(0, 50_000), admin.email);
+  revalidateQueue();
+  return result;
+}
+
+function retranscribeInput(input: RetranscribeInput): RetranscribeInput {
+  return {
+    target: String(input.target ?? "").slice(0, 300),
+    scope: input.scope === "alle" ? "alle" : "eine",
+    model: String(input.model ?? ""),
+    kind: input.kind === "neu_ausrichten" ? "neu_ausrichten" : "transkription",
+  };
+}
+
+/** Vorschau ohne Wirkung: Anzahl, Gesprächsdauer, geschätzte Kosten. */
+export async function planRetranscriptionAction(input: RetranscribeInput): Promise<RetranscribePlan> {
+  await requireAdmin();
+  return planRetranscription(retranscribeInput(input));
+}
+
+export async function enqueueRetranscriptionAction(input: RetranscribeInput): Promise<RetranscribePlan> {
+  const admin = await requireAdmin();
+  const result = await enqueueRetranscription(retranscribeInput(input), admin.email);
+  revalidateQueue();
+  return result;
 }
 
 /* --------------------------------------------------------------- E-Mail */

@@ -71,6 +71,7 @@ export const Collections = {
   comments: "comments",
   ratings: "ratings",
   jobs: "jobs",
+  transcriptionRuns: "transcription_runs",
 } as const;
 
 export type WithId<T> = T & { _id: string };
@@ -81,14 +82,24 @@ export const FIND_LIMIT = 100;
 export async function findMany<T>(
   collection: string,
   filter: Record<string, unknown> = {},
-  options: { limit?: number; projection?: Record<string, 0 | 1>; sort?: Record<string, 1 | -1> } = {},
+  options: {
+    limit?: number;
+    skip?: number;
+    projection?: Record<string, 0 | 1>;
+    sort?: Record<string, 1 | -1>;
+  } = {},
 ): Promise<WithId<T>[]> {
   const cursor = (await collectionOf(collection)).find(filter as Filter<StoredDoc>, {
     projection: options.projection,
     sort: options.sort,
   });
+  if (options.skip) cursor.skip(options.skip);
   if (options.limit) cursor.limit(options.limit);
   return (await cursor.toArray()) as unknown as WithId<T>[];
+}
+
+export async function aggregate<T>(collection: string, pipeline: Record<string, unknown>[]): Promise<T[]> {
+  return (await (await collectionOf(collection)).aggregate(pipeline).toArray()) as unknown as T[];
 }
 
 export async function findOne<T>(

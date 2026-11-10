@@ -17,7 +17,7 @@ type Result = { ok: boolean; message: string };
  * Schaltfläche, die sich beim Klick sofort sperrt und erst nach der Antwort
  * des Servers wieder freigibt; ein Doppelklick löst die Aktion nur einmal aus.
  */
-function useLockedAction() {
+export function useLockedAction() {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<Result | null>(null);
@@ -81,7 +81,7 @@ export function QueueFlash() {
   );
 }
 
-function ResultText({ result }: { result: Result | null }) {
+export function ResultText({ result }: { result: Result | null }) {
   if (!result) return null;
   return (
     <p role="status" className={`mt-1 text-[12px] leading-snug ${result.ok ? "text-ink-faint" : "text-bad"}`}>

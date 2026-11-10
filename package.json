@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --conditions=react-server --test scripts/check-wiedergabe-token.mts scripts/check-fortschritt.mts"
+    "test": "tsx --conditions=react-server --test scripts/check-wiedergabe-token.mts scripts/check-fortschritt.mts scripts/check-transkriptionsmodelle.mts"
   },
   "dependencies": {
     "@tanstack/react-table": "^9.3.1",

@@ -50,6 +50,27 @@ export const WaveformPlayer = forwardRef<
   useEffect(() => {
     let disposed = false;
     let instance: WaveSurfer | null = null;
+    let frame = 0;
+    let shownSecond = -1;
+
+    /**
+     * Liest je Bild die tatsächliche Position des <audio>-Elements, ohne
+     * Versatz. `timeupdate` kommt nur rund viermal pro Sekunde; die
+     * Wortmarkierung hinkte damit bis zu 250 ms hinterher.
+     */
+    const follow = () => {
+      const media = audioRef.current;
+      if (disposed || !media) return;
+      const seconds = media.currentTime;
+      onTimeRef.current(Math.round(seconds * 1000));
+      // Die Uhr zeigt ganze Sekunden; sie wird nur beim Wechsel neu gezeichnet.
+      const whole = Math.floor(seconds);
+      if (whole !== shownSecond) {
+        shownSecond = whole;
+        setPosition(seconds);
+      }
+      frame = requestAnimationFrame(follow);
+    };
 
     (async () => {
       const { default: WaveSurferLib } = await import("wavesurfer.js");
@@ -83,13 +104,25 @@ export const WaveformPlayer = forwardRef<
           setPosition(startRef.current / 1000);
         }
       });
+      // Während der Wiedergabe meldet `follow` die Zeit je Bild; `timeupdate`
+      // deckt Sprünge im Stillstand ab (Klick in die Wellenform, ±10 s).
       instance.on("timeupdate", (seconds: number) => {
         setPosition(seconds);
-        onTimeRef.current(Math.round(seconds * 1000));
+        if (frame === 0) onTimeRef.current(Math.round(seconds * 1000));
       });
-      instance.on("play", () => setPlaying(true));
-      instance.on("pause", () => setPlaying(false));
-      instance.on("finish", () => setPlaying(false));
+      instance.on("play", () => {
+        setPlaying(true);
+        if (frame === 0) frame = requestAnimationFrame(follow);
+      });
+      const stop = () => {
+        setPlaying(false);
+        cancelAnimationFrame(frame);
+        frame = 0;
+        const media = audioRef.current;
+        if (media) onTimeRef.current(Math.round(media.currentTime * 1000));
+      };
+      instance.on("pause", stop);
+      instance.on("finish", stop);
       instance.on("error", () =>
         setError("Die Audiodatei konnte nicht geladen werden. Bitte laden Sie die Seite neu."),
       );
@@ -97,6 +130,7 @@ export const WaveformPlayer = forwardRef<
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(frame);
       instance?.destroy();
       waveRef.current = null;
     };

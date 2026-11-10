@@ -64,8 +64,27 @@ import { claimJob } from "./claim";
 import { AbortedWhileWaiting, GeminiLimiter, QueueHalted } from "./limiter";
 import { alignTranscript } from "./shared/forced-alignment";
 import {
+  BASE_VOCABULARY,
+  EMPTY_USAGE,
+  TRANSCRIPTION_SETTINGS_ID,
+  TRANSCRIPT_HISTORY_MAX,
+  addUsage,
+  callerVocabulary,
+  costUsd,
+  legacyTranscriptMeta,
+  normalizeVocabulary,
+  resolveModel,
+  usageFromMetadata,
+  vocabularyPrompt,
+  type TokenUsage,
+  type TranscriptMeta,
+  type TranscriptionModel,
+  type TranscriptionSettings,
+} from "./shared/models";
+import {
   HEARTBEAT_MS,
   LIMITER_COLLECTION,
+  REQUIRED_WORKER_FEATURES,
   LIMITER_ID,
   SETTINGS_LIMITS,
   STALE_LOCK_MS,
@@ -97,7 +116,8 @@ const run = promisify(execFile);
 
 /** Überschreibbar nur für lokale Tests (`scripts/check-transcriber-retry.mts`). */
 const geminiUrl = () => process.env.TRANSCRIBER_GEMINI_URL || "https://www.clawcorp.ai/api/platform/gemini";
-const MODEL = "gemini-2.5-flash";
+/** Sammlung mit einem Eintrag je abgeschlossenem Lauf (Kosten je Monat im Dashboard). */
+const RUNS_COLLECTION = "transcription_runs";
 /** Wird ein Auftrag so oft verwaist vorgefunden, wird er zurückgestellt statt sofort fortgesetzt. */
 const MAX_STALE_CLAIMS = 2;
 const CHUNK_MS = 60 * 1000;
@@ -127,6 +147,11 @@ type Progress = {
   chunks: (NormalizedTranscript | null)[];
   /** Abschnitte ohne verwertbare Antwort (inhaltlicher Fehler); bleiben als Lücke. */
   failed: number[];
+  /** Modell dieses Zwischenstands; ein anderes Modell beginnt von vorn. */
+  model?: string;
+  /** Summe der Tokens aller beantworteten Anfragen dieses Auftrags. */
+  usage?: TokenUsage;
+  modelVersion?: string | null;
 };
 
 type JobDoc = {
@@ -150,6 +175,16 @@ type JobDoc = {
   lastError?: string | null;
   /** Endgültig fehlgeschlagen; wird nicht automatisch wiederholt. */
   permanent?: boolean | null;
+  /** Modell nur für diesen Auftrag; sonst gilt die Einstellung im Dashboard. */
+  model?: string | null;
+  /** `neu_ausrichten`: nur die Zeiten des vorhandenen Transkripts neu bestimmen, ohne Anfrage. */
+  kind?: "transkription" | "neu_ausrichten" | null;
+  /**
+   * Nachrangige Neu-Transkription eines vorhandenen Transkripts: kommt nach
+   * allen anderen Aufträgen, und das bisherige Transkript bleibt sichtbar,
+   * bis das neue gespeichert ist.
+   */
+  background?: boolean | null;
 };
 
 type RecordingDoc = {
@@ -157,6 +192,23 @@ type RecordingDoc = {
   audioUrl: string;
   mimeType: string;
   durationMs: number | null;
+  transcriptionStatus?: string;
+  transcriptionFinishedAt?: string | null;
+  transcriptionGaps?: { startMs: number; endMs: number }[] | null;
+  transcript?: TranscriptMeta | null;
+};
+
+type RunDoc = {
+  _id: string;
+  recordingId: string;
+  model: string;
+  modelVersion: string | null;
+  kind: "transkription" | "neu_ausrichten";
+  background: boolean;
+  at: string;
+  audioMs: number | null;
+  usage: TokenUsage;
+  costUsd: number;
 };
 
 type WorkerDoc = {
@@ -180,6 +232,8 @@ type Db = {
   workers: Collection<WorkerDoc>;
   limiter: Collection<LimiterDoc>;
   settings: Collection<{ _id: string; value?: number; at?: string }>;
+  config: Collection<TranscriptionSettings>;
+  runs: Collection<RunDoc>;
 };
 
 /**
@@ -218,6 +272,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const log = (message: string) => console.log(`[transkription] ${message}`);
 
 const WORKER_ID = `${hostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
+const WORKER_FEATURES = [...REQUIRED_WORKER_FEATURES];
 
 /* --------------------------------------------------------------- Beenden und Wecken */
 
@@ -389,8 +444,29 @@ async function msUntilNextDue(db: Db): Promise<number> {
 /* --------------------------------------------------------------- Übernahme */
 
 /** Übernimmt einen fälligen Auftrag exklusiv, verwaiste zuerst (`claim.ts`). */
-function claimNext(db: Db, lockId: string, newestFirst: boolean): Promise<JobDoc | null> {
-  return claimJob(db.jobs, { lockId, workerId: WORKER_ID, newestFirst });
+function claimNext(db: Db, lockId: string, newestFirst: boolean, allowBackground: boolean): Promise<JobDoc | null> {
+  return claimJob(db.jobs, { lockId, workerId: WORKER_ID, newestFirst, allowBackground });
+}
+
+/* --------------------------------------------------------------- Einstellungen */
+
+/**
+ * Modell und Vokabular aus dem Dashboard. Ohne gespeicherte Liste gilt die
+ * Vorbelegung samt den Namen der Anrufer aus den Aufnahmen.
+ */
+async function readTranscriptionConfig(db: Db, jobModel: string | null | undefined) {
+  const doc = await db.config.findOne({ _id: TRANSCRIPTION_SETTINGS_ID });
+  const model = resolveModel(jobModel || doc?.model);
+  let vocabulary = doc?.vocabulary;
+  if (!vocabulary) {
+    const names = await db.recordings
+      .aggregate<{ _id: { first?: string; last?: string } }>([
+        { $group: { _id: { first: "$callerFirstName", last: "$callerLastName" } } },
+      ])
+      .toArray();
+    vocabulary = [...BASE_VOCABULARY, ...callerVocabulary(names.map((entry) => entry._id))];
+  }
+  return { model, vocabulary: normalizeVocabulary(vocabulary) };
 }
 
 /* --------------------------------------------------------------- Audio */
@@ -470,22 +546,27 @@ async function encodeChunk(file: string, startMs: number, bitrate: string): Prom
 
 /* --------------------------------------------------------------- Dienst */
 
+type ChunkAnswer = { transcript: NormalizedTranscript; usage: TokenUsage; modelVersion: string | null };
+
 async function requestTranscript(
+  model: TranscriptionModel,
   prompt: string,
   audioBase64: string,
   signal: AbortSignal,
-): Promise<NormalizedTranscript> {
+): Promise<ChunkAnswer> {
+  // Nur der Prompt-Weg ist über den Plattform-Endpunkt nutzbar (siehe `shared/models.ts`).
+  if (model.path !== "prompt") throw new PermanentError(`Das Modell ${model.id} ist nicht verfügbar.`);
   let res: Response;
   try {
     res = await fetch(geminiUrl(), {
       method: "POST",
       headers: { Authorization: `Bearer ${env("CLAWCORP_API_KEY")}`, "content-type": "application/json" },
       body: JSON.stringify({
-        model: MODEL,
+        model: model.id,
         contents: [
           { role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "audio/ogg", data: audioBase64 } }] },
         ],
-        generationConfig: { responseMimeType: "application/json", temperature: 0 },
+        generationConfig: { responseMimeType: "application/json", temperature: 0, ...model.generationConfig },
       }),
       signal: AbortSignal.any([AbortSignal.timeout(GEMINI_TIMEOUT_MS), signal]),
     });
@@ -510,7 +591,15 @@ async function requestTranscript(
     throw new Error(failure);
   }
   try {
-    return normalizeTranscript(parseJsonLoosely((JSON.parse(text) as { text?: string }).text ?? ""));
+    const body = JSON.parse(text) as {
+      text?: string;
+      response?: { usageMetadata?: Parameters<typeof usageFromMetadata>[0]; modelVersion?: string };
+    };
+    return {
+      transcript: normalizeTranscript(parseJsonLoosely(body.text ?? "")),
+      usage: usageFromMetadata(body.response?.usageMetadata),
+      modelVersion: body.response?.modelVersion ?? null,
+    };
   } catch (error) {
     throw new ContentError(errorText(error));
   }
@@ -523,10 +612,16 @@ class LockLost extends Error {}
 let limiter: GeminiLimiter;
 
 /** Eine Anfrage an den Dienst, eingereiht in die gemeinsame Drossel. */
-async function throttledTranscript(prompt: string, audio: string, signal: AbortSignal, recordingId: string) {
+async function throttledTranscript(
+  model: TranscriptionModel,
+  prompt: string,
+  audio: string,
+  signal: AbortSignal,
+  recordingId: string,
+) {
   const lease = await limiter.acquire(signal);
   try {
-    const result = await requestTranscript(prompt, audio, signal);
+    const result = await requestTranscript(model, prompt, audio, signal);
     await limiter.release(lease, { ok: true });
     return result;
   } catch (error) {
@@ -555,6 +650,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
   const orphaned = before.status === "in_arbeit" && !!before.lockedAt;
   const attempts = resumed ? Math.max(before.attempts ?? 0, 1) : (before.attempts ?? 0) + 1;
   const staleClaims = (before.staleClaims ?? 0) + (orphaned ? 1 : 0);
+  const background = !!before.background;
   // Ein Zwischenstand bleibt über Wiederholungen erhalten; fertige Abschnitte
   // werden nicht noch einmal angefragt. `resetJob` verwirft ihn.
   let progress: Progress | null = before.progress ?? null;
@@ -565,8 +661,13 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     progressTotal: state?.chunkCount ?? null,
   });
 
-  const mirror = async (fields: Record<string, unknown>) => {
-    await db.recordings.updateOne({ _id: id }, { $set: fields });
+  /**
+   * Überträgt den Zustand auf die Aufnahme. Bei einer nachrangigen
+   * Neu-Transkription bleibt die Aufnahme mit ihrem bisherigen Transkript
+   * unverändert, bis das neue gespeichert ist (`always`).
+   */
+  const mirror = async (fields: Record<string, unknown>, always = false) => {
+    if (!background || always) await db.recordings.updateOne({ _id: id }, { $set: fields });
     await bumpStatusVersion(db);
   };
 
@@ -582,13 +683,18 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       },
     });
     if (done.matchedCount === 0) throw new LockLost();
-    await mirror({
-      transcriptionStatus: status,
-      transcriptionError: lastError,
-      transcriptionFinishedAt: closedAt,
-      transcriptionNextAttemptAt: null,
-      transcriptionAttempts: attempts,
-    });
+    // Eine fertige Neu-Transkription gilt auch für die Aufnahme; ein Fehlschlag
+    // betrifft nur den Auftrag, das bisherige Transkript bleibt.
+    await mirror(
+      {
+        transcriptionStatus: status,
+        transcriptionError: lastError,
+        transcriptionFinishedAt: closedAt,
+        transcriptionNextAttemptAt: null,
+        transcriptionAttempts: attempts,
+      },
+      status === "abgeschlossen",
+    );
   };
   const fail = async (message: string): Promise<Outcome> => {
     await finish("fehlgeschlagen", message.slice(0, 400));
@@ -713,16 +819,26 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
   const dir = await mkdtemp(join(tmpdir(), "transkription-"));
   try {
     const bytes = await download(recording.audioUrl, signal);
+    if (before.kind === "neu_ausrichten") {
+      const label = await retimeTranscript(db, recording, bytes);
+      await finish("abgeschlossen");
+      return { label, ok: true };
+    }
     const file = join(dir, "audio");
     await writeFile(file, bytes);
     const measuredMs = await probeAudio(file);
     const durationMs = measuredMs ?? recording.durationMs ?? CHUNK_MS;
     const chunkCount = Math.max(1, Math.ceil(durationMs / CHUNK_MS));
+    const { model, vocabulary } = await readTranscriptionConfig(db, before.model);
+    const vocabularyText = vocabularyPrompt(vocabulary);
 
+    // Ein Zwischenstand ohne Modellangabe stammt vom bisherigen Modell.
     const state: Progress =
-      progress && progress.chunkCount === chunkCount
+      progress && progress.chunkCount === chunkCount && (progress.model ?? "gemini-2.5-flash") === model.id
         ? progress
-        : { chunkCount, chunks: new Array(chunkCount).fill(null), failed: [] };
+        : { chunkCount, chunks: new Array(chunkCount).fill(null), failed: [], model: model.id, usage: { ...EMPTY_USAGE } };
+    state.model = model.id;
+    state.usage ??= { ...EMPTY_USAGE };
     progress = state;
     const pending = state.chunks
       .map((chunk, index) => (chunk === null && !state.failed.includes(index) ? index : -1))
@@ -748,7 +864,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       while (next < pending.length && !stopRun()) {
         const index = pending[next++];
         const startMs = index * CHUNK_MS;
-        const prompt = chunkCount === 1 ? PROMPT : chunkPrompt(index, chunkCount);
+        const prompt = (chunkCount === 1 ? PROMPT : chunkPrompt(index, chunkCount)) + vocabularyText;
         let result: NormalizedTranscript | null = null;
         let transientError: string | null = null;
         for (let attempt = 1; attempt <= CHUNK_ATTEMPTS && !result && !stopRun(); attempt += 1) {
@@ -758,8 +874,11 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
             const bitrate = BITRATES[attempt - 1] ?? "12k";
             let audio = await encodeChunk(file, startMs, bitrate);
             if (audio.length > MAX_INLINE_CHARS) audio = await encodeChunk(file, startMs, "10k");
-            const part = await throttledTranscript(prompt, audio, signal, id);
-            result = { ...part, segments: shiftSegments(part.segments, startMs) };
+            const answer = await throttledTranscript(model, prompt, audio, signal, id);
+            // Jede beantwortete Anfrage wird berechnet, auch wenn ein späterer Anlauf sie ersetzt.
+            state.usage = addUsage(state.usage ?? EMPTY_USAGE, answer.usage);
+            state.modelVersion = answer.modelVersion ?? state.modelVersion ?? null;
+            result = { ...answer.transcript, segments: shiftSegments(answer.transcript.segments, startMs) };
             transientError = null;
           } catch (error) {
             if (interrupted() || error instanceof AbortedWhileWaiting) break;
@@ -801,6 +920,9 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     if (deferredBy) return await defer(deferredBy);
 
     const done = state.chunks.filter((chunk): chunk is NormalizedTranscript => chunk !== null);
+    if (background && done.length > 0 && done.every((chunk) => chunk.segments.length === 0)) {
+      return await fail("Die Neu-Transkription hat keinen Text ergeben. Das bisherige Transkript bleibt.");
+    }
     if (done.length === 0) {
       // Keine einzige verwertbare Antwort: kein Transkript aus lauter Lücken
       // speichern, sondern alle Abschnitte später erneut anfragen.
@@ -826,19 +948,47 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     await saveTranscript(db, id, segments, merged.speakerLabels);
     const endMs = segments.length > 0 ? segments[segments.length - 1].endMs : 0;
     const duration = measuredMs ?? recording.durationMs ?? endMs;
+    const at = iso();
+    const usage = state.usage ?? EMPTY_USAGE;
+    const meta: TranscriptMeta = {
+      model: model.id,
+      modelVersion: state.modelVersion ?? null,
+      timing: model.timing,
+      at,
+      usage,
+      costUsd: costUsd(model, usage),
+      audioMs: duration > 0 ? duration : null,
+    };
     await db.recordings.updateOne(
       { _id: id },
-      {
-        $set: {
-          speakerCount: merged.speakerLabels.length,
-          wordCount: merged.wordCount,
-          transcriptionChunks: chunkCount,
-          transcriptionGaps: gaps.length > 0 ? gaps : null,
-          transcriptionAlignment: aligned ? "akustisch" : "geschaetzt",
-          ...(duration > 0 ? { durationMs: duration } : {}),
+      [
+        {
+          $set: {
+            speakerCount: merged.speakerLabels.length,
+            wordCount: merged.wordCount,
+            transcriptionChunks: chunkCount,
+            transcriptionGaps: gaps.length > 0 ? gaps : null,
+            transcriptionAlignment: aligned ? "akustisch" : "geschaetzt",
+            ...(duration > 0 ? { durationMs: duration } : {}),
+            transcript: { $literal: meta },
+            // Bisheriges Transkript in die Historie; fehlt seine Herkunft, war es gemini-2.5-flash.
+            transcriptHistory: previousTranscripts(recording),
+          },
         },
-      },
+      ],
     );
+    await db.runs.insertOne({
+      _id: `${id}:${at}`,
+      recordingId: id,
+      model: model.id,
+      modelVersion: meta.modelVersion,
+      kind: "transkription",
+      background,
+      at,
+      audioMs: meta.audioMs,
+      usage,
+      costUsd: meta.costUsd ?? 0,
+    });
     const status = segments.length === 0 ? "ohne_sprache" : "abgeschlossen";
     await finish(status);
     return { label: `${status}, ${chunkCount} Abschnitte, ${gaps.length} Lücken`, ok: true };
@@ -855,6 +1005,47 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     clearInterval(heartbeat);
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/** Bisherige Einträge plus das abgelöste Transkript als Wert für `$set` (Aggregations-Pipeline). */
+function previousTranscripts(recording: RecordingDoc): unknown {
+  const status = recording.transcriptionStatus;
+  const replaced =
+    recording.transcript ??
+    (status === "abgeschlossen" ? legacyTranscriptMeta(recording.transcriptionFinishedAt ?? null, recording.durationMs) : null);
+  const history = { $ifNull: ["$transcriptHistory", []] };
+  if (!replaced) return history;
+  return { $slice: [{ $concatArrays: [history, [{ $literal: replaced }]] }, -TRANSCRIPT_HISTORY_MAX] };
+}
+
+/**
+ * Bestimmt die Zeiten eines vorhandenen Transkripts neu (Forced Alignment),
+ * ohne Anfrage an den Dienst. Transkripte mit Wortzeiten des Modells bleiben,
+ * wie sie sind.
+ */
+async function retimeTranscript(db: Db, recording: RecordingDoc, bytes: Uint8Array): Promise<string> {
+  if (recording.transcript?.timing === "modell") return "Wortzeiten des Modells, nicht neu ausgerichtet";
+  const parts = await db.parts
+    .find({ recordingId: recording._id } as Record<string, unknown>)
+    .toArray() as unknown as { partIndex: number; segments: TranscriptSegment[] }[];
+  const segments = parts.sort((a, b) => a.partIndex - b.partIndex).flatMap((part) => part.segments ?? []);
+  if (segments.length === 0) throw new PermanentError("Kein Transkript vorhanden, das neu ausgerichtet werden kann.");
+  const mime = recording.mimeType as AudioMime;
+  const aligned =
+    mime === "audio/wav" || mime === "audio/mpeg"
+      ? alignTranscript(segments, bytes, mime, {
+          gaps: recording.transcriptionGaps ?? [],
+        })
+      : null;
+  if (!aligned) throw new PermanentError("Die Aufnahme trägt zu wenig verwertbare Sprache für eine Ausrichtung.");
+  const labels = [...new Set(aligned.segments.map((segment) => segment.speakerLabel))];
+  await saveTranscript(db, recording._id, aligned.segments, labels);
+  const meta = recording.transcript ?? legacyTranscriptMeta(recording.transcriptionFinishedAt ?? null, recording.durationMs);
+  await db.recordings.updateOne(
+    { _id: recording._id },
+    { $set: { transcriptionAlignment: "akustisch", transcript: { ...meta, retimedAt: iso() } } },
+  );
+  return `neu ausgerichtet, ${aligned.regionCount} Sprachbereiche`;
 }
 
 /** Gleiche Ablage wie `saveTranscript` in `src/lib/transcription.ts`. */
@@ -898,9 +1089,12 @@ async function slot(db: Db, index: number): Promise<void> {
     // Abwechselnd neuester und ältester Auftrag; die Plätze beginnen versetzt.
     const newestFirst = (index + claims) % 2 === 0;
     const lockId = randomUUID();
+    // Platz 1 bleibt für neue Uploads frei, sobald es mehr als einen Platz gibt;
+    // nachrangige Neu-Transkriptionen laufen nur auf den übrigen Plätzen.
+    const allowBackground = index > 0 || current.jobsPerInstance === 1;
     let job: JobDoc | null;
     try {
-      job = await claimNext(db, lockId, newestFirst);
+      job = await claimNext(db, lockId, newestFirst, allowBackground);
     } catch (error) {
       log(`Platz ${index + 1}: Übernahme fehlgeschlagen (${errorText(error)})`);
       await wake.wait(ERROR_PAUSE_MS);
@@ -968,6 +1162,8 @@ async function main() {
     workers: database.collection<WorkerDoc>(WORKERS_COLLECTION),
     limiter: database.collection<LimiterDoc>(LIMITER_COLLECTION),
     settings: database.collection(STATUS_VERSION_COLLECTION),
+    config: database.collection<TranscriptionSettings>(STATUS_VERSION_COLLECTION),
+    runs: database.collection<RunDoc>(RUNS_COLLECTION),
   };
   limiter = new GeminiLimiter(db.limiter, WORKER_ID, {
     maxConcurrent: geminiConcurrency(),
@@ -992,6 +1188,8 @@ async function main() {
         processed: 0,
         failed: 0,
         deferred: 0,
+        // Die Anwendung reiht nachrangige Aufträge erst ein, wenn jede laufende Instanz sie kennt.
+        features: WORKER_FEATURES,
       },
     },
     { upsert: true },

@@ -302,6 +302,46 @@ Dienst bearbeitet also beide.
 - **Zustand**: Jede Instanz schreibt ihr Lebenszeichen nach `transcriber_workers`. Das
   Admin-Dashboard zeigt Instanzen, letztes Lebenszeichen, Warteschlange und Erledigtes der letzten
   Stunde.
+- **Transkriptionsmodell** (`settings/transcription_settings`, Dashboard „Transkriptionsmodell“,
+  ohne Neudeploy): `gemini-3.5-transcribe` (gewünschter Standard), `gemini-3.5-flash-lite`,
+  `gemini-2.5-flash-lite`, `gemini-2.5-flash`. Katalog, Preise und Kostenrechnung in
+  `transcriber/shared/models.ts`. Die Flash-Modelle laufen über den Prompt (60-s-Abschnitte) mit
+  Forced Alignment und ohne bzw. mit minimalem Denken (`thinkingBudget: 0`, bei 3.5
+  `thinkingLevel: "minimal"`). Nicht verfügbare Modelle sind im Dashboard gesperrt; der Dienst fällt
+  dann auf `gemini-2.5-flash` zurück:
+  - `gemini-3.5-transcribe`: Wortzeiten, Sprecher und Vokabular gibt es nur über Googles
+    Interactions-API (`POST /v1beta/interactions`, `generation_config.transcription_config.mode`
+    mit `diarization_mode` und `timestamp_granularities`). Der Plattform-Endpunkt `/gemini` leitet
+    nur `generateContent` weiter (`model`, `contents`, `generationConfig`; andere Felder werden
+    verworfen, `input` wird abgelehnt, `transcriptionConfig` lehnt Google in `generationConfig` ab).
+    Dort liefert das Modell nur Text (`parts[].audioTranscription.text`). Es fehlen: eine
+    Weiterleitung der Interactions-API samt `transcription_config` und Files-API-Upload (Audio
+    über 200 KB). Die Umsetzung der Wortannotationen liegt bereit
+    (`transcriber/shared/word-timestamps.ts`). Laut Google sind `custom_vocabulary` und
+    Wortzeiten/Sprecher nicht kombinierbar, und mit Wortzeiten gilt eine Grenze von 30 min je
+    Anfrage: Längere Gespräche (bis 41 min) brauchen also weiterhin Abschnitte.
+  - `gemini-2.5-flash-lite`: Google antwortet „no longer available to new users“.
+- **Vokabular** (gleiches Dokument, Dashboard „Vokabular“): Liste von Namen und Begriffen für den
+  Prompt der Flash-Modelle. Ohne gespeicherte Liste gilt die Vorbelegung (Immotrust, Immotrust AG,
+  Schweizer Orte und Strassen, Immobilienbegriffe) plus die Namen aller Anrufer der Aufnahmen.
+- **Modell je Auftrag und Neu-Transkription**: Felder am Auftrag in `jobs`: `model` (gilt nur für
+  diesen Auftrag), `kind` (`transkription` oder `neu_ausrichten` = nur Forced Alignment, ohne
+  Anfrage) und `background: true` (nachrangig). Nachrangige Aufträge übernimmt ein Platz erst, wenn
+  kein anderer fällig ist, und nie Platz 1, sobald es mehr als einen Platz gibt; die Aufnahme behält
+  Status und bisheriges Transkript, bis das neue gespeichert ist. Dashboard „Bestehende Transkripte
+  neu erstellen“: eine Aufnahme (Anrufnummer, ID oder Dateiname) oder alle, Modell wählbar,
+  Vorschau mit geschätzten Kosten. Beispiel Anruf 10980 mit gemini-3.5-transcribe: Anrufnummer
+  `10980`, Modell wählen, „Prüfen“, „Einreihen“ (sobald das Modell verfügbar ist). Die Anwendung
+  reiht erst ein, wenn jede laufende Instanz `features` (`REQUIRED_WORKER_FEATURES`) meldet; eine
+  ältere Fassung würde solche Aufträge wie gewöhnliche abarbeiten.
+- **Herkunft und Kosten**: Nach jedem Lauf schreibt der Dienst `recordings.transcript` (Modell,
+  `modelVersion`, Zeitstempel-Methode `modell`/`schaetzung`, Datum, Tokens aus `usageMetadata`
+  inklusive Denken, Kosten in USD) und hängt die abgelöste Fassung an `transcriptHistory` (höchstens
+  20). Zusätzlich je Lauf ein Eintrag in `transcription_runs` (Dashboard „Kosten“ je Monat und
+  Modell, tatsächliche Kosten je Minute). Die Detailseite zeigt Modell, Wortzeiten und Datum, Admins
+  zusätzlich Tokens und Kosten. `scripts/backfill-transcript-meta.mts` trägt für ältere Transkripte
+  `gemini-2.5-flash` mit „Schätzung“ nach (mehrfach ausführbar; nach dem Produktions-Deploy einmal
+  erneut ausführen, weil die ältere Fassung des Dienstes bis dahin ohne Herkunft speichert).
 - **Audio**: geholt über die gespeicherte Adresse (`/api/dateien/<schlüssel>` der Anwendung, liefert
   aus dem R2-Bucket der jeweiligen Umgebung), daher keine R2-Zugangsdaten im Dienst.
 
@@ -313,6 +353,7 @@ TEST_MONGODB_URI=... npx tsx scripts/check-legacy-reclaim.mts     # verwaiste Au
 TEST_MONGODB_URI=... npx tsx scripts/check-gemini-limiter.mts
 TEST_MONGODB_URI=... npx tsx scripts/check-transcriber-retry.mts   # rund 4 min, zwei Instanzen gegen nachgebildeten Dienst
 TEST_MONGODB_URI=... npx tsx scripts/check-spending-block.mts      # rund 2 min: Kostenlimit-Sperre, Freigabe, Monatswechsel, Pause, Nach vorne, Grenzen
+TEST_MONGODB_URI=... npx tsx scripts/check-neu-transkription.mts   # Vorrang neuer Uploads, Modell je Auftrag, Tokens/Kosten, Historie, Neu-Ausrichten
 ```
 
 ```bash

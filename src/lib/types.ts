@@ -68,6 +68,10 @@ export type Recording = {
   transcriptionGaps?: { startMs: number; endMs: number }[] | null;
   /** Fehlt bei Transkripten aus der Zeit vor der akustischen Ausrichtung. */
   transcriptionAlignment?: AlignmentSource | null;
+  /** Herkunft des aktuellen Transkripts (Modell, Zeitstempel-Methode, Tokens, Kosten). */
+  transcript?: TranscriptMeta | null;
+  /** Abgelöste Transkripte, älteste zuerst. */
+  transcriptHistory?: TranscriptMeta[] | null;
   deletionFlagged: boolean;
   deletionFlaggedBy: string | null;
   deletionFlaggedAt: string | null;
@@ -83,6 +87,8 @@ export type {
   TranscriptWord,
 } from "../../transcriber/shared/types";
 import type { AlignmentSource, TranscriptSegment } from "../../transcriber/shared/types";
+import type { TranscriptMeta } from "../../transcriber/shared/models";
+export type { TranscriptMeta } from "../../transcriber/shared/models";
 
 export type TranscriptIndexSentence = {
   t: number; // Startzeit in ms
@@ -149,6 +155,12 @@ export type Job = {
   originalFilename: string;
   /** „Nach vorne“ im Admin-Dashboard; höhere Werte werden zuerst bearbeitet. */
   priority?: number | null;
+  /** Modell nur für diesen Auftrag; sonst gilt die Einstellung im Dashboard. */
+  model?: string | null;
+  /** `neu_ausrichten`: nur die Zeiten neu bestimmen, ohne Anfrage an den Dienst. */
+  kind?: "transkription" | "neu_ausrichten" | null;
+  /** Nachrangige Neu-Transkription; das bisherige Transkript bleibt bis zum Ende sichtbar. */
+  background?: boolean | null;
 };
 
 /**
