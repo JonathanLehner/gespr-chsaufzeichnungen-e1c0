@@ -1,5 +1,4 @@
-import "server-only";
-import type { AudioMime } from "./audio";
+import type { AudioMime } from "./types";
 
 /**
  * Zerlegt eine Aufnahme in kurze Abschnitte.

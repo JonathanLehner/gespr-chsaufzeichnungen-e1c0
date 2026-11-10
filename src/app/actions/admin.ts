@@ -1,6 +1,5 @@
 "use server";
 
-import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSuperuser, normalizeEmail, requireAdmin } from "@/lib/auth";
 import { Collections, deleteById, findById } from "@/lib/db";
@@ -15,7 +14,7 @@ import { DELIVERY_LABELS, EMAIL_PATTERN, type MailSettingsInput } from "@/lib/ma
 import { saveMailSettings } from "@/lib/mailer";
 import { saveTemplate } from "@/lib/settings";
 import { getRecording, hardDeleteRecording } from "@/lib/recordings";
-import { requeueTranscription, runPendingJobs, transcribeRecording } from "@/lib/transcription";
+import { requeueTranscription, runPendingJobs } from "@/lib/transcription";
 import type { Comment, User } from "@/lib/types";
 
 export type TemplatePreview = {
@@ -91,15 +90,6 @@ export async function retryTranscriptionAction(
   if (!recording) return { ok: false, message: "Aufnahme nicht gefunden." };
 
   const result = await requeueTranscription(recordingId, { allowCompleted: true });
-  if (result.state === "gestartet") {
-    after(async () => {
-      try {
-        await transcribeRecording(recordingId);
-      } catch {
-        /* Der Fehler wird am Auftrag festgehalten. */
-      }
-    });
-  }
   revalidatePath("/admin");
   revalidatePath("/aufnahmen");
   revalidatePath(`/aufnahmen/${recordingId}`);

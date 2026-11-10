@@ -16,7 +16,7 @@ Verkaufsgespräche der Immotrust AG.
   geteilt, abschnittsweise transkribiert und wieder zusammengesetzt. Enthält eine Aufnahme nichts
   Gesprochenes, erhält sie den Status „Keine Sprache“ statt einer Fehlermeldung.
 - **Zeiten aus der Aufnahme, nicht aus dem Modell**: Die Zeitangaben des Sprachmodells werden
-  verworfen und durch gemessene ersetzt (`src/lib/forced-alignment.ts`). Aus dem Lautstärkeverlauf
+  verworfen und durch gemessene ersetzt (`transcriber/shared/forced-alignment.ts`). Aus dem Lautstärkeverlauf
   der Datei werden die Sprechabschnitte bestimmt; darauf wird der Text im Verhältnis der Silben
   verteilt und die Satzgrenzen werden per dynamischer Programmierung auf die Pausen gezogen.
   Am Bestand gemessen lag ein Satzanfang zuvor im Mittel 0,2 s und im schlechtesten Fall 80 s neben
@@ -105,8 +105,9 @@ werden keine Beispieldaten erzeugt.
 | `src/app/api/audio/[id]` | Ausliefern der Aufnahme mit Bereichsanfragen und signiertem Token |
 | `src/app/api/dateien/[key]` | Ausliefern abgelegter Dateien aus dem R2-Bucket |
 | `src/lib` | Datenzugriff, Authentifizierung, E-Mail-Versand, Dateinamensanalyse, Transkription |
-| `src/lib/audio-split.ts`, `src/lib/audio-envelope.ts` | verlustfreies Zerlegen der Aufnahme und ihr Lautstärkeverlauf (WAV direkt, MP3 über `global_gain` der Seiteninformation) |
-| `src/lib/forced-alignment.ts`, `src/lib/syllables.ts` | Ausrichtung des Transkripts an der Aufnahme; Silbenzahl über `hypher` mit deutschen Trennmustern |
+| `transcriber/` | Transkriptionsdienst: arbeitet die Warteschlange `jobs` ab (eigener Container, siehe „Transkriptionsdienst“) |
+| `transcriber/shared/audio-split.ts`, `transcriber/shared/audio-envelope.ts` | verlustfreies Zerlegen der Aufnahme und ihr Lautstärkeverlauf (WAV direkt, MP3 über `global_gain` der Seiteninformation) |
+| `transcriber/shared/forced-alignment.ts`, `transcriber/shared/syllables.ts` | Ausrichtung des Transkripts an der Aufnahme; Silbenzahl über `hypher` mit deutschen Trennmustern |
 | `scripts` | Bildgenerierung, WebP-Varianten, Funktions- und Leistungstest |
 
 ## Prüfung
@@ -213,6 +214,26 @@ npx wrangler deploy                 # Ausliefern
 lokal in `.dev.vars`. Für den E-Mail-Versand kommt `MAIL_API_KEY` auf demselben Weg dazu, sofern der
 Schlüssel nicht im Admin-Dashboard hinterlegt wird.
 
+### Transkriptionsdienst
+
+Die Anwendung legt beim Upload nur den Auftrag an (`jobs`, Status `wartend`). Abgearbeitet wird die
+Warteschlange vom Dienst in `transcriber/`, den ClawCorp laut `clawcorp.json` alle zehn Minuten als
+Container startet (nur in Produktion; Staging und Produktion teilen sich die Datenbank, der Dienst
+bearbeitet also beide). Er braucht `MONGODB_URI` und `CLAWCORP_API_KEY` und ffmpeg (im Image).
+
+Ein Lauf übernimmt fällige Aufträge (wartend, verwaist, pausiert oder fällige Wiederholung) nach
+Alter, bis die Warteschlange leer ist oder acht Minuten vorbei sind. Jeder fertige Abschnitt wird
+sofort am Auftrag gespeichert (`progress`), ein offener Auftrag läuft im nächsten Lauf an derselben
+Stelle weiter. Die Abschnitte gehen als Opus (16 kbit/s, rund 160 KB) direkt in die Anfrage.
+
+```bash
+docker build -t transcriber transcriber
+docker run --rm -e MONGODB_URI=... -e CLAWCORP_API_KEY=... transcriber   # ein Lauf
+```
+
+Die reine Logik in `transcriber/shared/` (Prompt, Auswertung, Zerlegung, Ausrichtung) nutzen Dienst
+und Anwendung gemeinsam.
+
 ## Technische Entscheidungen
 
 - **Datenhaltung**: eigene MongoDB über den offiziellen Treiber (`MONGODB_URI`). Im Worker öffnet
@@ -254,6 +275,11 @@ Schlüssel nicht im Admin-Dashboard hinterlegt wird.
 - **Aufträge**: Jede Aufnahme hat genau einen Transkriptionsauftrag. Er wird vor der Ausführung
   gesperrt, sodass parallele Aufrufe, wiederholte Klicks oder ein erneuter Upload keine doppelten
   Läufe erzeugen. Hängengebliebene Aufträge werden nach zehn Minuten wieder aufgenommen.
+- **Warteschlange ausserhalb des Workers**: Früher wurde die Warteschlange nach dem Upload und bei
+  Seitenaufrufen per `after()` angestossen. Im Worker endet diese Arbeit rund 30 Sekunden nach der
+  Antwort; ein Gespräch von einigen Minuten braucht länger. Die Läufe brachen ab, der Auftrag blieb
+  `in_arbeit` und wurde zehn Minuten später erneut begonnen, und weil die Warteschlange nach Alter
+  sortiert, kamen neuere Aufträge nie an die Reihe. Deshalb läuft sie im eigenen Dienst.
 - **E-Mail**: Bestätigungs- und Reset-Mails gehen über einen HTTP-Versanddienst hinaus (Resend,
   Postmark, SendGrid oder Mailgun); SMTP steht auf Cloudflare Workers nicht zur Verfügung.
   Versanddienst, Schlüssel und Absender stehen entweder in den Umgebungsvariablen oder im

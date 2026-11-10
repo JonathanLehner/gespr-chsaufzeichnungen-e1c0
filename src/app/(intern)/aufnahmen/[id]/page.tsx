@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { after } from "next/server";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { signPlaybackToken } from "@/lib/audio";
 import { Collections, findById } from "@/lib/db";
 import { getRecording, listComments, listRatings } from "@/lib/recordings";
-import { loadTranscript, sweepQueue } from "@/lib/transcription";
+import { loadTranscript } from "@/lib/transcription";
 import { formatDateTime, formatDateTimeWithSeconds, formatDuration } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { RecordingPlayerPanel } from "@/components/recording-player-panel";
@@ -59,9 +58,6 @@ export default async function AufnahmeDetailPage({
   const nextAttemptAt = recording.transcriptionNextAttemptAt ?? job?.nextAttemptAt ?? null;
   const nextAttemptLabel =
     failed && nextAttemptAt ? formatDateTimeWithSeconds(nextAttemptAt) : null;
-
-  // Fällige Wiederholungen anstossen, ohne die Antwort zu verzögern.
-  after(() => sweepQueue());
 
   const metadata: [string, React.ReactNode][] = [
     ["Anrufer", recording.callerName],

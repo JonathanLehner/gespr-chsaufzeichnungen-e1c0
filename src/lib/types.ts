@@ -76,35 +76,13 @@ export type Recording = {
   ratingCount: number;
 };
 
-/**
- * Herkunft der Zeitangaben eines Transkripts.
- *
- * `akustisch`: an der Aufnahme ausgerichtet – die Wortmarkierung folgt dem
- * Gehörten. `geschaetzt`: die Datei war beim Transkribieren nicht lesbar, die
- * Zeiten stammen aus dem Sprachmodell und sind nur grob.
- */
-export type AlignmentSource = "akustisch" | "geschaetzt";
-
-export type TranscriptWord = {
-  text: string;
-  startMs: number;
-  endMs: number;
-};
-
-export type TranscriptSentence = {
-  text: string;
-  startMs: number;
-  endMs: number;
-  words: TranscriptWord[];
-};
-
-export type TranscriptSegment = {
-  speaker: string;
-  speakerLabel: string;
-  startMs: number;
-  endMs: number;
-  sentences: TranscriptSentence[];
-};
+export type {
+  AlignmentSource,
+  TranscriptSegment,
+  TranscriptSentence,
+  TranscriptWord,
+} from "../../transcriber/shared/types";
+import type { AlignmentSource, TranscriptSegment } from "../../transcriber/shared/types";
 
 export type TranscriptIndexSentence = {
   t: number; // Startzeit in ms

@@ -1,5 +1,4 @@
-import "server-only";
-import type { AudioMime } from "./audio";
+import type { AudioMime } from "./types";
 import { mp3Frames, parseWavLayout } from "./audio-split";
 
 /**

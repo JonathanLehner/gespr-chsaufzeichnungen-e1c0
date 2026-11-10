@@ -1,10 +1,8 @@
 import { Fragment } from "react";
 import Link from "next/link";
-import { after } from "next/server";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { listRecordings, type SortKey } from "@/lib/recordings";
-import { sweepQueue } from "@/lib/transcription";
 import { describeTranscriptionError } from "@/lib/transcription-errors";
 import { cetDayStartUtcIso, formatDateTime, formatDuration } from "@/lib/time";
 import { RatingValue, StatusBadge } from "@/components/status";
@@ -104,9 +102,6 @@ export default async function AufnahmenPage({
         (row.transcriptionStatus === "fehlgeschlagen" && !!row.transcriptionNextAttemptAt),
     )
     .map((row) => ({ id: row._id, status: row.transcriptionStatus }));
-
-  // Fällige Wiederholungen anstossen, ohne die Antwort zu verzögern.
-  after(() => sweepQueue());
 
   if (result.totalAll === 0) {
     return (

@@ -1,5 +1,5 @@
 /**
- * Prüft das verlustfreie Zerlegen langer Aufnahmen (`src/lib/audio-split.ts`).
+ * Prüft das verlustfreie Zerlegen langer Aufnahmen (`transcriber/shared/audio-split.ts`).
  *
  * Aus zwei vorhandenen Aufnahmen wird eine lange Datei zusammengesetzt, geteilt
  * und nachgerechnet: Die Abschnitte müssen lückenlos aneinander anschliessen,
@@ -9,7 +9,7 @@
  * Aufruf: npx tsx scripts/check-audio-split.mts
  */
 import { Collections, findMany } from "../src/lib/db";
-import { measureDurationMs, parseWavLayout, splitAudio } from "../src/lib/audio-split";
+import { measureDurationMs, parseWavLayout, splitAudio } from "../transcriber/shared/audio-split";
 import type { Recording } from "../src/lib/types";
 
 const CHUNK_TARGET_MS = 90_000;

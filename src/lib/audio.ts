@@ -1,7 +1,8 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-export type AudioMime = "audio/wav" | "audio/mpeg";
+export type { AudioMime } from "../../transcriber/shared/types";
+import type { AudioMime } from "../../transcriber/shared/types";
 
 export const ACCEPTED_EXTENSIONS = [".wav", ".mp3"];
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;

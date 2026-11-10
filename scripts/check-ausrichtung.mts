@@ -1,6 +1,6 @@
 /**
  * Prüft die Ausrichtung des Transkripts an der Aufnahme
- * (`src/lib/forced-alignment.ts`).
+ * (`transcriber/shared/forced-alignment.ts`).
  *
  * Gemessen wird für jede Aufnahme mit Transkript, wie weit die Anfänge der
  * Sätze und der Wörter von der nächstgelegenen Sprechflanke entfernt liegen –
@@ -11,8 +11,8 @@
  * Aufruf: npx tsx --env-file=.env.local --conditions=react-server scripts/check-ausrichtung.mts
  */
 import { Collections, findMany } from "../src/lib/db";
-import { energyEnvelope } from "../src/lib/audio-envelope";
-import { alignToEnvelope, detectSpeech, type SpeechRegion } from "../src/lib/forced-alignment";
+import { energyEnvelope } from "../transcriber/shared/audio-envelope";
+import { alignToEnvelope, detectSpeech, type SpeechRegion } from "../transcriber/shared/forced-alignment";
 import { loadTranscript } from "../src/lib/transcription";
 import type { Recording, TranscriptSegment } from "../src/lib/types";
 

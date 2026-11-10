@@ -1,7 +1,6 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { normalizeEmail, requireUser } from "@/lib/auth";
 import {
@@ -20,12 +19,7 @@ import {
   refreshRatingSummary,
   setDeletionFlag,
 } from "@/lib/recordings";
-import {
-  requeueTranscription,
-  runPendingJobs,
-  transcribeRecording,
-  type RequeueResult,
-} from "@/lib/transcription";
+import { requeueTranscription, type RequeueResult } from "@/lib/transcription";
 import { getTemplateSettings } from "@/lib/settings";
 import { parseFilename } from "@/lib/filename-template";
 import { mimeFromExtension, fingerprintOf, MAX_UPLOAD_BYTES } from "@/lib/audio";
@@ -160,31 +154,14 @@ export type StatusUpdate = {
 };
 
 /**
- * Liefert den aktuellen Transkriptionsstatus und stösst dabei offene sowie
- * fällige Aufträge an. Die Oberfläche fragt nur so lange nach, wie Aufträge
+ * Liefert den aktuellen Transkriptionsstatus. Abgearbeitet werden die Aufträge
+ * vom Transkriptionsdienst (`transcriber/`). Die Oberfläche fragt nur so lange nach, wie Aufträge
  * offen sind oder eine automatische Wiederholung aussteht.
  */
 export async function transcriptionStatusAction(ids: string[]): Promise<StatusUpdate[]> {
   await requireUser();
   if (ids.length === 0) return [];
   const rows = await findMany<Recording>(Collections.recordings, { _id: { $in: ids.slice(0, 100) } });
-  const now = new Date().toISOString();
-  const pending = rows.some(
-    (row) => row.transcriptionStatus === "wartend" || row.transcriptionStatus === "in_arbeit",
-  );
-  const retryDue = rows.some(
-    (row) =>
-      row.transcriptionStatus === "fehlgeschlagen" &&
-      !!row.transcriptionNextAttemptAt &&
-      row.transcriptionNextAttemptAt <= now,
-  );
-  if (pending || retryDue) {
-    await runPendingJobs(1);
-    const refreshed = await findMany<Recording>(Collections.recordings, {
-      _id: { $in: ids.slice(0, 100) },
-    });
-    return refreshed.map(toStatusUpdate);
-  }
   return rows.map(toStatusUpdate);
 }
 
@@ -209,16 +186,6 @@ function toStatusUpdate(row: Recording): StatusUpdate {
 export async function restartTranscriptionAction(recordingId: string): Promise<RequeueResult> {
   await requireUser();
   const result = await requeueTranscription(recordingId);
-
-  if (result.state === "gestartet") {
-    after(async () => {
-      try {
-        await transcribeRecording(recordingId);
-      } catch {
-        /* Der Fehler wird am Auftrag festgehalten. */
-      }
-    });
-  }
 
   revalidatePath("/aufnahmen");
   revalidatePath(`/aufnahmen/${recordingId}`);

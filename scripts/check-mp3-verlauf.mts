@@ -1,5 +1,5 @@
 /**
- * Prüft den Lautstärkeverlauf von MP3-Dateien (`src/lib/audio-envelope.ts`).
+ * Prüft den Lautstärkeverlauf von MP3-Dateien (`transcriber/shared/audio-envelope.ts`).
  *
  * MP3 wird nicht decodiert – die Laufzeitumgebung lässt keinen Decoder zu –,
  * sondern über das Feld `global_gain` der Seiteninformation ausgelesen. Ob das
@@ -14,9 +14,9 @@
  */
 import * as lame from "@breezystack/lamejs";
 import { Collections, findMany } from "../src/lib/db";
-import { parseWavLayout } from "../src/lib/audio-split";
-import { energyEnvelope } from "../src/lib/audio-envelope";
-import { detectSpeech, type SpeechRegion } from "../src/lib/forced-alignment";
+import { parseWavLayout } from "../transcriber/shared/audio-split";
+import { energyEnvelope } from "../transcriber/shared/audio-envelope";
+import { detectSpeech, type SpeechRegion } from "../transcriber/shared/forced-alignment";
 import type { Recording } from "../src/lib/types";
 
 const Mp3Encoder = (lame as unknown as { Mp3Encoder: new (...args: number[]) => {

@@ -285,7 +285,7 @@ export function TranscriptView({
    * Das laufende Wort innerhalb der laufenden Zeile.
    *
    * Die Wortzeiten sind an der Aufnahme ausgerichtet (siehe
-   * `src/lib/forced-alignment.ts`), stehen also auf gemessener Sprechzeit und
+   * `transcriber/shared/forced-alignment.ts`), stehen also auf gemessener Sprechzeit und
    * nicht auf einer Schätzung. Nur deshalb ist eine Markierung je Wort
    * überhaupt vertretbar.
    */

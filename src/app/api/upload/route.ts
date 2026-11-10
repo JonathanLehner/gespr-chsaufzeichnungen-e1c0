@@ -1,4 +1,4 @@
-import { after, type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import {
   MAX_UPLOAD_BYTES,
@@ -11,7 +11,6 @@ import { parseFilename } from "@/lib/filename-template";
 import { createRecording, invalidateRecordingCache } from "@/lib/recordings";
 import { getTemplateSettings } from "@/lib/settings";
 import { storeFile } from "@/lib/storage";
-import { runPendingJobs } from "@/lib/transcription";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -141,16 +140,8 @@ export async function POST(request: NextRequest) {
     });
     invalidateRecordingCache();
 
-    if (created) {
-      after(async () => {
-        try {
-          await runPendingJobs(1);
-        } catch {
-          /* Fehler werden im Auftrag festgehalten */
-        }
-      });
-    }
-
+    // Der Auftrag steht als „wartend“ in der Datenbank; abgearbeitet wird er
+    // vom Transkriptionsdienst (`transcriber/`), nicht in dieser Anfrage.
     return Response.json({
       status: created ? "ok" : "vorhanden",
       id: recording._id,
