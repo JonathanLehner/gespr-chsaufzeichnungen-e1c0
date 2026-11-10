@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gespr-chsaufzeichnungen-e1c0",
-  "main": ".open-next/worker.js",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-08-17",
   "compatibility_flags": [
     "nodejs_compat",
@@ -13,6 +13,11 @@
       "bucket_name": "gespr-chsaufzeichnungen-e1c0"
     }
   ],
+  // Live-Stand der Transkription (worker/live-status.ts).
+  "durable_objects": {
+    "bindings": [{ "name": "LIVE_STATUS", "class_name": "LiveStatus" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveStatus"] }],
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"

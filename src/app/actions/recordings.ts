@@ -19,7 +19,13 @@ import {
   refreshRatingSummary,
   setDeletionFlag,
 } from "@/lib/recordings";
-import { jobProgress, requeueTranscription, type RequeueResult } from "@/lib/transcription";
+import {
+  jobProgress,
+  liveDetail,
+  requeueTranscription,
+  type LiveDetail,
+  type RequeueResult,
+} from "@/lib/transcription";
 import { getTemplateSettings } from "@/lib/settings";
 import { parseFilename } from "@/lib/filename-template";
 import { mimeFromExtension, fingerprintOf, MAX_UPLOAD_BYTES } from "@/lib/audio";
@@ -156,8 +162,8 @@ export type StatusUpdate = {
 
 /**
  * Liefert den aktuellen Transkriptionsstatus. Abgearbeitet werden die Aufträge
- * vom Transkriptionsdienst (`transcriber/`). Die Oberfläche fragt nur so lange nach, wie Aufträge
- * offen sind oder eine automatische Wiederholung aussteht.
+ * vom Transkriptionsdienst (`transcriber/`). Die Oberfläche fragt nach, sobald der Live-Kanal
+ * eine Änderung meldet, und nur so lange, wie Aufträge offen sind oder eine Wiederholung aussteht.
  */
 export async function transcriptionStatusAction(ids: string[]): Promise<StatusUpdate[]> {
   await requireUser();
@@ -167,6 +173,15 @@ export async function transcriptionStatusAction(ids: string[]): Promise<StatusUp
     rows.filter((row) => row.transcriptionStatus === "in_arbeit").map((row) => row._id),
   );
   return rows.map((row) => toStatusUpdate(row, progress.get(row._id)?.progressDone ?? null));
+}
+
+export type { LiveDetail };
+
+/** Stand einer einzelnen Aufnahme für die Fortschrittsanzeige der Detailseite, direkt aus der Datenbank. */
+export async function transcriptionLiveAction(id: string): Promise<LiveDetail | null> {
+  await requireUser();
+  const row = await findById<Recording>(Collections.recordings, id);
+  return row ? liveDetail(row) : null;
 }
 
 function toStatusUpdate(row: Recording, progressDone: number | null): StatusUpdate {
@@ -312,7 +327,7 @@ export async function setRatingAction(recordingId: string, score: number): Promi
     updatedAt: now,
   });
   await refreshRatingSummary(recordingId);
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
   revalidatePath(`/aufnahmen/${recordingId}`);
   revalidatePath("/aufnahmen");
   return {

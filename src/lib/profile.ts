@@ -46,7 +46,7 @@ export async function renameUser(email: string, rawName: string): Promise<Rename
       { $set: { uploadedByName: name } },
     ),
   ]);
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
 
   return {
     ok: true,

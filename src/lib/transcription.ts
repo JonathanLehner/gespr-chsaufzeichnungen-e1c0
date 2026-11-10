@@ -22,8 +22,10 @@ import {
   effectiveConcurrency,
   iso,
   lockIsFresh,
+  queuePosition,
   scheduledRetryFilter,
   type LimiterDoc,
+  type ProgressFields,
   type QueueErrorEntry,
   type QueueSettings,
   type SpendingBlock,
@@ -92,7 +94,7 @@ export async function realignRecording(
     { _id: recordingId },
     { $set: { transcriptionAlignment: "akustisch" } },
   );
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
 
   return {
     ok: true,
@@ -123,6 +125,8 @@ export async function resetJob(recordingId: string): Promise<void> {
         progressDone: null,
         progressTotal: null,
         progressAt: null,
+        progressRunAt: null,
+        progressRunDone: null,
         paused: null,
         permanent: null,
         staleClaims: 0,
@@ -143,36 +147,107 @@ export async function resetJob(recordingId: string): Promise<void> {
       },
     },
   );
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
 }
 
 /* ------------------------------------------------------------ Laufender Stand für die Anzeige */
 
 /** Fortschritt laufender Aufträge, ohne die gespeicherten Teiltranskripte zu laden. */
-export type JobProgress = {
-  progressDone: number | null;
-  progressTotal: number | null;
+export type JobProgress = ProgressFields & {
   /** Letzter gesicherter Abschnitt, sonst Beginn des Laufs. */
   updatedAt: string | null;
+  /** Letztes Lebenszeichen des Auftrags (`lockedAt`, alle 30 s erneuert). */
+  heartbeatAt: string | null;
+  startedAt: string | null;
 };
+
+const PROGRESS_PROJECTION = {
+  progressDone: 1, progressTotal: 1, progressAt: 1, progressRunAt: 1, progressRunDone: 1,
+  startedAt: 1, lockedAt: 1,
+} as const;
+
+type ProgressDoc = Job & Partial<ProgressFields>;
+
+/** BSON-Datum (frühere Aufträge) oder ISO-Text als ISO-Text. */
+function isoOf(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === "string" ? value : null;
+}
+
+export function toJobProgress(job: ProgressDoc): JobProgress {
+  const lockedAt = isoOf(job.lockedAt);
+  return {
+    progressDone: job.progressDone ?? null,
+    progressTotal: job.progressTotal ?? null,
+    progressAt: job.progressAt ?? null,
+    progressRunAt: job.progressRunAt ?? null,
+    progressRunDone: job.progressRunDone ?? null,
+    updatedAt: job.progressAt ?? job.startedAt ?? lockedAt,
+    heartbeatAt: lockedAt,
+    startedAt: job.startedAt ?? null,
+  };
+}
 
 export async function jobProgress(ids: string[]): Promise<Map<string, JobProgress>> {
   if (ids.length === 0) return new Map();
-  const jobs = await findMany<Job & { progressDone?: number; progressTotal?: number; progressAt?: string }>(
+  const jobs = await findMany<ProgressDoc>(
     Collections.jobs,
     { _id: { $in: ids.slice(0, 100) } },
-    { projection: { progressDone: 1, progressTotal: 1, progressAt: 1, startedAt: 1, lockedAt: 1 } },
+    { projection: PROGRESS_PROJECTION },
   );
-  return new Map(
-    jobs.map((job) => [
-      job._id,
-      {
-        progressDone: job.progressDone ?? null,
-        progressTotal: job.progressTotal ?? null,
-        updatedAt: job.progressAt ?? job.startedAt ?? job.lockedAt ?? null,
-      },
-    ]),
-  );
+  return new Map(jobs.map((job) => [job._id, toJobProgress(job)]));
+}
+
+/**
+ * Ungefähre Position eines wartenden, sofort fälligen Auftrags (siehe
+ * `queuePosition`); `null`, wenn er nicht (mehr) sofort fällig wartet.
+ */
+export async function waitingPosition(recordingId: string): Promise<number | null> {
+  const job = await findById<Job>(Collections.jobs, recordingId);
+  if (!job || job.status !== "wartend") return null;
+  const now = iso();
+  if (job.nextAttemptAt && job.nextAttemptAt > now) return null;
+  const due = { status: "wartend", $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: now } }] };
+  const priority = job.priority ?? 0;
+  const samePriority = priority > 0 ? { priority } : { $or: [{ priority: null }, { priority: { $lte: 0 } }] };
+  const [prioritizedAhead, older, newer] = await Promise.all([
+    countDocuments(Collections.jobs, { ...due, priority: { $gt: priority } }),
+    countDocuments(Collections.jobs, { $and: [due, samePriority, { createdAt: { $lt: job.createdAt } }] }),
+    countDocuments(Collections.jobs, { $and: [due, samePriority, { createdAt: { $gt: job.createdAt } }] }),
+  ]);
+  return queuePosition({ prioritizedAhead, older, newer });
+}
+
+export type LiveDetail = {
+  status: TranscriptionStatus;
+  error: string | null;
+  nextAttemptAt: string | null;
+  progress: JobProgress | null;
+  /** Ungefähre Position eines sofort fälligen wartenden Auftrags. */
+  position: number | null;
+  halt: QueueHalt;
+  /** Uhrzeit des Servers; gleicht eine abweichende Uhr im Browser aus. */
+  serverNow: number;
+};
+
+/** Stand einer Aufnahme für die Fortschrittsanzeige, ohne Zwischenspeicher. */
+export async function liveDetail(row: Recording): Promise<LiveDetail> {
+  const id = row._id;
+  const waiting = row.transcriptionStatus === "wartend";
+  const [progress, position, halt] = await Promise.all([
+    jobProgress(waiting || row.transcriptionStatus === "in_arbeit" ? [id] : []),
+    waiting ? waitingPosition(id) : Promise.resolve(null),
+    waiting ? queueHalt() : Promise.resolve(null),
+  ]);
+  return {
+    status: row.transcriptionStatus,
+    error: row.transcriptionError,
+    nextAttemptAt: row.transcriptionNextAttemptAt ?? null,
+    progress: progress.get(id) ?? null,
+    position,
+    halt,
+    serverNow: Date.now(),
+  };
 }
 
 /* ------------------------------------------------------------ Neustart durch Nutzende */
@@ -240,7 +315,7 @@ export async function requeueTranscription(
         },
       },
     );
-    invalidateRecordingCache();
+    await invalidateRecordingCache();
   }
 
   return { ok: true, message: "Die Transkription wurde neu eingereiht.", state: "gestartet" };
@@ -435,7 +510,7 @@ export async function moveJobToFront(recordingId: string): Promise<{ ok: boolean
   );
   if (matched === 0) return { ok: false, message: "Der Auftrag wartet nicht mehr." };
   await updateOne(Collections.recordings, { _id: recordingId }, { $set: { transcriptionNextAttemptAt: null } });
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
   return { ok: true, message: "Steht jetzt an erster Stelle." };
 }
 
@@ -451,7 +526,7 @@ export async function retryJobNow(recordingId: string): Promise<RequeueResult> {
   );
   if (matched > 0) {
     await updateOne(Collections.recordings, { _id: recordingId }, { $set: { transcriptionNextAttemptAt: null } });
-    invalidateRecordingCache();
+    await invalidateRecordingCache();
     return { ok: true, message: "Der nächste Versuch ist sofort fällig.", state: "gestartet" };
   }
   return requeueTranscription(recordingId, { allowCompleted: true });
@@ -469,7 +544,7 @@ export async function requeueAllFailed(): Promise<number> {
 export type QueueJobRow = Pick<
   Job,
   "_id" | "status" | "attempts" | "lastError" | "createdAt" | "startedAt" | "finishedAt" | "nextAttemptAt" | "originalFilename" | "priority"
->;
+> & { progress: JobProgress };
 
 export type QueueOverview = {
   counts: Record<TranscriptionStatus, number>;
@@ -488,34 +563,63 @@ export type QueueOverview = {
   settings: QueueSettings | null;
   /** Aktuell angewandte Werte (gespeichert oder Standard des Dienstes). */
   effective: { maxConcurrent: number; minGapMs: number; jobsPerInstance: number };
+  /** In der letzten Stunde fertig gewordene Aufnahmen und ihre Gesprächsdauer. */
+  throughput: { recordings: number; audioMs: number };
 };
 
 const JOB_FIELDS = {
+  ...PROGRESS_PROJECTION,
   status: 1, attempts: 1, lastError: 1, createdAt: 1, startedAt: 1, finishedAt: 1,
   nextAttemptAt: 1, originalFilename: 1, priority: 1,
 } as const;
 
+type JobRowDoc = Omit<QueueJobRow, "progress"> & Partial<ProgressFields> & { lockedAt?: unknown };
+
+function toJobRows(docs: JobRowDoc[]): QueueJobRow[] {
+  return docs.map((doc) => ({
+    _id: doc._id,
+    status: doc.status,
+    attempts: doc.attempts,
+    lastError: doc.lastError,
+    createdAt: doc.createdAt,
+    startedAt: doc.startedAt,
+    finishedAt: doc.finishedAt,
+    nextAttemptAt: doc.nextAttemptAt,
+    originalFilename: doc.originalFilename,
+    priority: doc.priority,
+    progress: toJobProgress(doc as unknown as ProgressDoc),
+  }));
+}
+
 export async function queueOverview(health: QueueHealth): Promise<QueueOverview> {
   const statuses: TranscriptionStatus[] = ["wartend", "in_arbeit", "abgeschlossen", "ohne_sprache", "fehlgeschlagen"];
   const now = iso();
-  const [countList, waiting, nextAttempts, failed, recentlyFinished, oldest, doc] = await Promise.all([
+  const [countList, waiting, nextAttempts, failed, recentlyFinished, oldest, doc, finishedLastHour] = await Promise.all([
     Promise.all(statuses.map((status) => countDocuments(Collections.jobs, { status }))),
-    findMany<QueueJobRow>(Collections.jobs, { status: { $in: ["in_arbeit", "wartend"] } }, {
+    findMany<JobRowDoc>(Collections.jobs, { status: { $in: ["in_arbeit", "wartend"] } }, {
       projection: JOB_FIELDS, sort: { status: 1, priority: -1, createdAt: 1 }, limit: 25,
     }),
-    findMany<QueueJobRow>(Collections.jobs, { status: "wartend", nextAttemptAt: { $gt: now } }, {
+    findMany<JobRowDoc>(Collections.jobs, { status: "wartend", nextAttemptAt: { $gt: now } }, {
       projection: JOB_FIELDS, sort: { nextAttemptAt: 1 }, limit: 10,
     }),
-    findMany<QueueJobRow>(Collections.jobs, { status: "fehlgeschlagen" }, {
+    findMany<JobRowDoc>(Collections.jobs, { status: "fehlgeschlagen" }, {
       projection: JOB_FIELDS, sort: { finishedAt: -1 }, limit: 50,
     }),
-    findMany<QueueJobRow>(Collections.jobs, { status: { $in: ["abgeschlossen", "ohne_sprache"] } }, {
+    findMany<JobRowDoc>(Collections.jobs, { status: { $in: ["abgeschlossen", "ohne_sprache"] } }, {
       projection: JOB_FIELDS, sort: { finishedAt: -1 }, limit: 10,
     }),
-    findMany<QueueJobRow>(Collections.jobs, { status: "wartend" }, {
+    findMany<JobRowDoc>(Collections.jobs, { status: "wartend" }, {
       projection: JOB_FIELDS, sort: { createdAt: 1 }, limit: 1,
     }),
     findById<LimiterDoc & { lastBlock?: QueueOverview["lastBlock"] }>(LIMITER_COLLECTION, LIMITER_ID),
+    findMany<Recording>(
+      Collections.recordings,
+      {
+        transcriptionStatus: { $in: ["abgeschlossen", "ohne_sprache"] },
+        transcriptionFinishedAt: { $gte: iso(Date.now() - 60 * 60 * 1000) },
+      },
+      { projection: { durationMs: 1 } },
+    ),
   ]);
 
   const rawErrors = [...(doc?.errors ?? [])].reverse().slice(0, 25);
@@ -530,11 +634,11 @@ export async function queueOverview(health: QueueHealth): Promise<QueueOverview>
   const alive = health.workers.filter((worker) => worker.alive);
   return {
     counts: Object.fromEntries(statuses.map((status, index) => [status, countList[index]])) as Record<TranscriptionStatus, number>,
-    oldestWaiting: oldest[0] ?? null,
-    waiting,
-    nextAttempts,
-    failed,
-    recentlyFinished,
+    oldestWaiting: toJobRows(oldest)[0] ?? null,
+    waiting: toJobRows(waiting),
+    nextAttempts: toJobRows(nextAttempts),
+    failed: toJobRows(failed),
+    recentlyFinished: toJobRows(recentlyFinished),
     errors: rawErrors.map((entry) => ({ ...entry, filename: entry.recordingId ? names.get(entry.recordingId) ?? null : null })),
     manualPause: doc?.manualPause ?? null,
     spendingBlock: activeBlock(doc),
@@ -544,6 +648,10 @@ export async function queueOverview(health: QueueHealth): Promise<QueueOverview>
       maxConcurrent: doc?.settings?.maxConcurrent ?? doc?.maxConcurrent ?? 2,
       minGapMs: doc?.settings?.minGapMs ?? doc?.minGapMs ?? 4000,
       jobsPerInstance: doc?.settings?.jobsPerInstance ?? alive[0]?.concurrency ?? 2,
+    },
+    throughput: {
+      recordings: finishedLastHour.length,
+      audioMs: finishedLastHour.reduce((sum, row) => sum + (row.durationMs ?? 0), 0),
     },
   };
 }

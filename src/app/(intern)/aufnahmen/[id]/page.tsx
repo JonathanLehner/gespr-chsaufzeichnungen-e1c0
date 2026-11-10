@@ -5,16 +5,14 @@ import { requireUser } from "@/lib/auth";
 import { signPlaybackToken } from "@/lib/audio";
 import { Collections, findById } from "@/lib/db";
 import { getRecording, listComments, listRatings } from "@/lib/recordings";
-import { jobProgress, loadTranscript, queueHalt } from "@/lib/transcription";
+import { liveDetail, loadTranscript } from "@/lib/transcription";
 import { formatDateTime, formatDateTimeWithSeconds, formatDuration, renderTimestamp } from "@/lib/time";
 import { StatusBadge } from "@/components/status";
 import { RecordingPlayerPanel } from "@/components/recording-player-panel";
 import { CommentsPanel } from "@/components/comments-panel";
 import { RatingPanel } from "@/components/rating-panel";
 import { DeletionFlagButton } from "@/components/deletion-flag";
-import { TranscriptionWatcher } from "@/components/transcription-watcher";
 import { TranscriptionStatusLine } from "@/components/transcription-status-line";
-import { haltText } from "@/lib/queue-halt";
 import type { Job } from "@/lib/types";
 
 export async function generateMetadata({
@@ -43,23 +41,23 @@ export default async function AufnahmeDetailPage({
   const recording = await getRecording(id);
   if (!recording) notFound();
 
-  const [segments, comments, ratings, job, progressById, halt] = await Promise.all([
+  const pending =
+    recording.transcriptionStatus === "wartend" || recording.transcriptionStatus === "in_arbeit";
+  const [segments, comments, ratings, job, live] = await Promise.all([
     recording.transcriptionStatus === "abgeschlossen" ? loadTranscript(id) : Promise.resolve([]),
     listComments(id),
     listRatings(id),
     findById<Job>(Collections.jobs, id),
-    jobProgress(recording.transcriptionStatus === "in_arbeit" ? [id] : []),
-    recording.transcriptionStatus === "wartend" ? queueHalt() : Promise.resolve(null),
+    pending ? liveDetail(recording) : Promise.resolve(null),
   ]);
-  const progress = progressById.get(id);
+  const progress = recording.transcriptionStatus === "in_arbeit" ? live?.progress : null;
+  const halt = live?.halt ?? null;
   const renderedAt = renderTimestamp();
 
   const token = signPlaybackToken(id, user.email);
   const audioSrc = `/api/audio/${id}?token=${encodeURIComponent(token)}`;
   const startMs = Number(Array.isArray(query.t) ? query.t[0] : query.t) || 0;
   const initialQuery = String((Array.isArray(query.q) ? query.q[0] : query.q) ?? "");
-  const pending =
-    recording.transcriptionStatus === "wartend" || recording.transcriptionStatus === "in_arbeit";
   const nextAttemptAt = recording.transcriptionNextAttemptAt ?? job?.nextAttemptAt ?? null;
   const retryPending =
     !halt &&
@@ -197,18 +195,6 @@ export default async function AufnahmeDetailPage({
         </div>
       )}
 
-      {pending && !(recording.transcriptionStatus === "wartend" && halt) && (
-        <TranscriptionWatcher
-          entries={[
-            {
-              id: recording._id,
-              status: recording.transcriptionStatus,
-              progressDone: progress?.progressDone ?? null,
-            },
-          ]}
-        />
-      )}
-
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <RecordingPlayerPanel
           audioSrc={audioSrc}
@@ -216,8 +202,8 @@ export default async function AufnahmeDetailPage({
           segments={segments}
           status={recording.transcriptionStatus}
           errorMessage={recording.transcriptionError}
-          nextAttemptLabel={nextAttemptLabel}
-          haltMessage={recording.transcriptionStatus === "wartend" && halt ? haltText(halt) : null}
+          live={live}
+          renderedAt={renderedAt}
           lastAttemptAt={recording.transcriptionFinishedAt}
           gaps={recording.transcriptionGaps ?? []}
           alignment={recording.transcriptionAlignment ?? null}

@@ -332,3 +332,33 @@
     padding: 0 1px;
   }
 }
+
+/* Unbestimmter Fortschritt: ein Streifen läuft durch, ohne einen Anteil zu behaupten. */
+@layer components {
+  .progress-indeterminate {
+    position: absolute;
+    inset-block: 0;
+    width: 30%;
+    border-radius: 999px;
+    background: var(--color-petrol);
+    animation: progress-slide 1.6s ease-in-out infinite;
+  }
+
+  @keyframes progress-slide {
+    from {
+      left: -30%;
+    }
+    to {
+      left: 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress-indeterminate {
+      animation: none;
+      left: 0;
+      width: 100%;
+      opacity: 0.35;
+    }
+  }
+}

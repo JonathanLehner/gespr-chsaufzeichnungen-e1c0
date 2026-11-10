@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { transcriptionStatusAction } from "@/app/actions/recordings";
+import { liveFailures, subscribeLive, type LiveState } from "@/lib/live-client";
 import type { TranscriptionStatus } from "@/lib/types";
 
 export type WatchedRecording = {
@@ -12,8 +13,8 @@ export type WatchedRecording = {
   progressDone?: number | null;
 };
 
-const OPEN_INTERVAL_MS = 8000;
-const RETRY_INTERVAL_MS = 30000;
+/** Mindestabstand zweier Neuladungen im Modus „alles“. */
+const REFRESH_GAP_MS = 5000;
 
 function signatureOf(
   entries: { id: string; status: TranscriptionStatus; progressDone?: number | null }[],
@@ -25,17 +26,33 @@ function signatureOf(
 }
 
 /**
- * Fragt den Status offener Transkriptionen nach und lädt die Ansicht neu,
- * sobald sich ein Auftrag verändert hat. Beobachtet werden laufende Aufträge
- * und fehlgeschlagene Aufträge, für die noch eine automatische Wiederholung
- * aussteht. Die Abfrage endet, sobald nichts mehr offen ist.
+ * Hält die Ansicht offener Transkriptionen aktuell. Der Live-Kanal meldet
+ * jede Änderung an Status, Fortschritt oder Lebenszeichen; daraufhin wird der
+ * Stand der beobachteten Aufnahmen frisch aus der Datenbank gelesen und die
+ * Ansicht neu geladen, sobald sich etwas verändert hat. Beobachtet werden
+ * laufende und wartende Aufträge sowie fehlgeschlagene mit ausstehender
+ * Wiederholung; ist nichts mehr offen, endet die Verbindung.
+ *
+ * `mode="alles"` (Admin-Dashboard): jede Meldung lädt die Ansicht neu,
+ * höchstens alle 5 s, damit auch neu begonnene Aufträge und das
+ * Lebenszeichen sofort erscheinen. Die Verbindung bleibt dort offen, solange
+ * die Seite offen ist.
  */
-export function TranscriptionWatcher({ entries }: { entries: WatchedRecording[] }) {
+export function TranscriptionWatcher({
+  entries,
+  mode = "eintraege",
+  quiet = false,
+}: {
+  entries: WatchedRecording[];
+  mode?: "eintraege" | "alles";
+  quiet?: boolean;
+}) {
   const router = useRouter();
-  const [failed, setFailed] = useState(false);
+  const [liveState, setLiveState] = useState<LiveState>("verbindet");
 
   const ids = entries.map((entry) => entry.id);
-  const key = ids.join(",");
+  // Im Modus „alles“ besteht die Verbindung auch ohne offene Einträge: Neue Aufträge erscheinen sofort.
+  const key = mode === "alles" ? "alles" : ids.join(",");
   const initialSignature = signatureOf(entries);
   const openCount = entries.filter(
     (entry) => entry.status === "wartend" || entry.status === "in_arbeit",
@@ -45,52 +62,95 @@ export function TranscriptionWatcher({ entries }: { entries: WatchedRecording[] 
   useEffect(() => {
     if (!key) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let running = false;
+    let again = false;
     let signature = initialSignature;
+    let lastRefresh = 0;
+    let pendingRefresh: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: (() => void) | null = null;
 
-    const tick = async () => {
+    const refresh = () => {
+      const wait = lastRefresh + REFRESH_GAP_MS - Date.now();
+      if (wait > 0) {
+        pendingRefresh ??= setTimeout(() => {
+          pendingRefresh = undefined;
+          lastRefresh = Date.now();
+          router.refresh();
+        }, wait);
+        return;
+      }
+      lastRefresh = Date.now();
+      router.refresh();
+    };
+
+    const check = async () => {
+      if (mode === "alles") {
+        refresh();
+        return;
+      }
+      if (running) {
+        again = true;
+        return;
+      }
+      running = true;
       try {
         const updates = await transcriptionStatusAction(key.split(","));
         if (cancelled) return;
-
         const next = signatureOf(updates);
         if (next !== signature) {
           signature = next;
           router.refresh();
         }
-
         const open = updates.some(
-          (update) => update.status === "wartend" || update.status === "in_arbeit",
+          (update) =>
+            update.status === "wartend" ||
+            update.status === "in_arbeit" ||
+            (update.status === "fehlgeschlagen" && !!update.nextAttemptAt),
         );
-        const scheduled = updates.some(
-          (update) => update.status === "fehlgeschlagen" && !!update.nextAttemptAt,
-        );
-        if (open) timer = setTimeout(tick, OPEN_INTERVAL_MS);
-        else if (scheduled) timer = setTimeout(tick, RETRY_INTERVAL_MS);
+        if (!open) {
+          unsubscribe?.();
+          unsubscribe = null;
+        }
       } catch {
-        if (!cancelled) setFailed(true);
+        // Die nächste Meldung des Live-Kanals versucht es erneut.
+      } finally {
+        running = false;
+        if (again && !cancelled && unsubscribe) {
+          again = false;
+          void check();
+        }
       }
     };
 
-    timer = setTimeout(tick, 2500);
+    unsubscribe = subscribeLive(() => void check(), setLiveState);
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      if (pendingRefresh) clearTimeout(pendingRefresh);
+      unsubscribe?.();
     };
     // `initialSignature` beschreibt denselben Datenstand wie `key` und würde die
-    // Abfrage sonst bei jedem Render neu starten.
+    // Verbindung sonst bei jedem Render neu aufbauen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, router]);
+  }, [key, mode, router]);
 
   if (!key) return null;
+  const disconnected = liveState === "getrennt" && liveFailures() >= 3;
+
+  if (disconnected) {
+    return (
+      <div className="notice notice-warn" role="status">
+        Die Live-Aktualisierung ist unterbrochen. Laden Sie die Seite neu, um den aktuellen Stand zu
+        sehen.
+      </div>
+    );
+  }
+  if (quiet) return null;
 
   return (
     <div className="notice notice-info" role="status">
-      {failed
-        ? "Der Status der Transkription konnte nicht abgefragt werden. Bitte laden Sie die Seite neu."
-        : openCount > 0
-          ? `${openCount} ${openCount === 1 ? "Aufnahme wird" : "Aufnahmen werden"} transkribiert. Die Ansicht aktualisiert sich automatisch, sobald das Transkript vorliegt.`
-          : `${retryCount} ${retryCount === 1 ? "fehlgeschlagene Transkription wird" : "fehlgeschlagene Transkriptionen werden"} vom System automatisch erneut versucht. Die Ansicht aktualisiert sich dabei selbst.`}
+      {openCount > 0
+        ? `${openCount} ${openCount === 1 ? "Aufnahme wird" : "Aufnahmen werden"} transkribiert. Die Ansicht aktualisiert sich automatisch, sobald das Transkript vorliegt.`
+        : `${retryCount} ${retryCount === 1 ? "fehlgeschlagene Transkription wird" : "fehlgeschlagene Transkriptionen werden"} vom System automatisch erneut versucht. Die Ansicht aktualisiert sich dabei selbst.`}
     </div>
   );
 }

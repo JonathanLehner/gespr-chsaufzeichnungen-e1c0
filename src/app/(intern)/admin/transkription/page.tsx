@@ -5,6 +5,16 @@ import { formatDateTimeWithSeconds, renderTimestamp } from "@/lib/time";
 import { haltText } from "@/lib/queue-halt";
 import { queueHealth, queueOverview, type QueueHealth, type QueueJobRow } from "@/lib/transcription";
 import { StatusBadge } from "@/components/status";
+import { TranscriptionWatcher } from "@/components/transcription-watcher";
+import {
+  currentChunk,
+  formatChunkRate,
+  formatRemaining,
+  formatSecondsAgo,
+  hasChunkProgress,
+  remainingMs,
+} from "@/lib/progress-text";
+import { STALE_LOCK_MS } from "../../../../../transcriber/shared/queue";
 import { AdminTabs } from "@/components/admin-tabs";
 import {
   JobActionButton,
@@ -57,6 +67,12 @@ export default async function TranskriptionAdminPage() {
         <AdminTabs />
       </div>
       <QueueFlash />
+      {/* Laufende und wartende Aufträge, Lebenszeichen und Zähler bleiben ohne Neuladen aktuell. */}
+      <TranscriptionWatcher
+        entries={overview.waiting.map((job) => ({ id: job._id, status: job.status }))}
+        mode="alles"
+        quiet
+      />
 
       {/* Zustand und Steuerung */}
       <section className="card p-5" aria-labelledby="zustand">
@@ -155,6 +171,12 @@ export default async function TranskriptionAdminPage() {
         </div>
 
         <dl className="mt-3 grid gap-x-6 gap-y-1 text-[13px] sm:grid-cols-[auto_1fr]">
+          <dt className="text-ink-soft">Durchsatz (60 min)</dt>
+          <dd className="text-ink tabular-nums">
+            {overview.throughput.recordings.toLocaleString("de-CH")}{" "}
+            {overview.throughput.recordings === 1 ? "Aufnahme" : "Aufnahmen"} fertig,{" "}
+            {Math.round(overview.throughput.audioMs / 60_000).toLocaleString("de-CH")} Min. Gesprächsdauer
+          </dd>
           <dt className="text-ink-soft">Ältester wartender Auftrag</dt>
           <dd className="text-ink">
             {overview.oldestWaiting ? (
@@ -465,6 +487,7 @@ function JobTable({
                         ab {formatDateTimeWithSeconds(job.nextAttemptAt)}
                       </span>
                     )}
+                    {job.status === "in_arbeit" && <RunningProgress job={job} now={now} />}
                   </td>
                   <td className="td whitespace-nowrap text-[12px] tabular-nums">{formatDateTimeWithSeconds(job.createdAt)}</td>
                   <td className="td whitespace-nowrap text-[12px] tabular-nums">{formatDateTimeWithSeconds(job.finishedAt)}</td>
@@ -479,5 +502,40 @@ function JobTable({
       )}
       {note && <p className="mt-1.5 text-[12px] text-ink-faint">{note}</p>}
     </div>
+  );
+}
+
+/** Fortschritt eines laufenden Auftrags: Abschnitt, gemessene Geschwindigkeit, Lebenszeichen. */
+function RunningProgress({ job, now }: { job: QueueJobRow; now: number }) {
+  const progress = job.progress;
+  const heartbeat = progress.heartbeatAt;
+  if (!heartbeat || now - Date.parse(heartbeat) > STALE_LOCK_MS) {
+    return (
+      <span className="mt-0.5 block text-[12px] text-warn tabular-nums">
+        Keine Rückmeldung{heartbeat ? ` seit ${formatDateTimeWithSeconds(heartbeat)}` : ""}, wird neu
+        vergeben
+      </span>
+    );
+  }
+  const chunked = hasChunkProgress(progress);
+  const total = progress.progressTotal ?? 0;
+  const percent = chunked ? Math.round((Math.min(progress.progressDone ?? 0, total) / total) * 100) : null;
+  const rate = chunked ? formatChunkRate(progress) : null;
+  const remaining = chunked ? remainingMs(progress) : null;
+  return (
+    <span className="mt-1 block min-w-[180px] text-[12px] text-ink-soft tabular-nums">
+      {chunked ? `Abschnitt ${currentChunk(progress)}/${total}` : "Fortschritt unbestimmt"}
+      {rate ? ` · ${rate}` : ""}
+      {percent !== null && (
+        <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-busy-soft" aria-hidden>
+          <span className="block h-full rounded-full bg-busy" style={{ width: `${percent}%` }} />
+        </span>
+      )}
+      <span className="mt-0.5 block text-ink-faint">
+        {progress.startedAt ? `Gestartet ${formatDateTimeWithSeconds(progress.startedAt)} · ` : ""}
+        Lebenszeichen {formatSecondsAgo(heartbeat, now)}
+        {remaining !== null ? ` · ${formatRemaining(remaining)}` : ""}
+      </span>
+    </span>
   );
 }

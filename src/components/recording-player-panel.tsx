@@ -4,6 +4,8 @@ import { useCallback, useRef, useState } from "react";
 import { WaveformPlayer, type PlayerHandle } from "@/components/waveform-player";
 import { TranscriptView } from "@/components/transcript-view";
 import { RetryTranscriptionButton } from "@/components/retry-transcription-button";
+import { TranscriptionProgress } from "@/components/transcription-progress";
+import type { LiveDetail } from "@/app/actions/recordings";
 import { formatDuration } from "@/lib/time";
 import { describeTranscriptionError, retryHint } from "@/lib/transcription-errors";
 import type { AlignmentSource, TranscriptSegment, TranscriptionStatus } from "@/lib/types";
@@ -14,8 +16,8 @@ export function RecordingPlayerPanel({
   segments,
   status,
   errorMessage,
-  nextAttemptLabel,
-  haltMessage = null,
+  live,
+  renderedAt,
   lastAttemptAt,
   gaps,
   alignment,
@@ -27,9 +29,9 @@ export function RecordingPlayerPanel({
   segments: TranscriptSegment[];
   status: TranscriptionStatus;
   errorMessage: string | null;
-  nextAttemptLabel: string | null;
-  /** Warteschlange angehalten (Pause oder API-Limit); nur bei wartenden Aufnahmen. */
-  haltMessage?: string | null;
+  /** Stand eines offenen Auftrags (Fortschritt, Position, Anhalten); sonst `null`. */
+  live: LiveDetail | null;
+  renderedAt: number;
   /** Zeitpunkt des letzten Versuchs – setzt die Schaltfläche nach einem neuen Fehlschlag zurück. */
   lastAttemptAt: string | null;
   /** Zeitbereiche ohne Text, weil der Dienst den Abschnitt nicht beantwortet hat. */
@@ -74,8 +76,8 @@ export function RecordingPlayerPanel({
             recordingId={recordingId}
             status={status}
             errorMessage={errorMessage}
-            nextAttemptLabel={nextAttemptLabel}
-            haltMessage={haltMessage}
+            live={live}
+            renderedAt={renderedAt}
             lastAttemptAt={lastAttemptAt}
           />
         )}
@@ -121,15 +123,15 @@ function TranscriptPlaceholder({
   recordingId,
   status,
   errorMessage,
-  nextAttemptLabel,
-  haltMessage,
+  live,
+  renderedAt,
   lastAttemptAt,
 }: {
   recordingId: string;
   status: TranscriptionStatus;
   errorMessage: string | null;
-  nextAttemptLabel: string | null;
-  haltMessage: string | null;
+  live: LiveDetail | null;
+  renderedAt: number;
   lastAttemptAt: string | null;
 }) {
   if (status === "ohne_sprache") {
@@ -192,39 +194,14 @@ function TranscriptPlaceholder({
     );
   }
 
-  if (status === "wartend" && haltMessage) {
-    return (
-      <section className="card border-[#e6d3a4] bg-warn-soft p-5" role="status">
-        <h2 className="text-[14px] font-semibold text-warn">Transkription in der Warteschlange</h2>
-        <p className="mt-1.5 text-[13px] leading-relaxed text-warn">
-          {haltMessage}. Die Aufnahme behält ihren Platz und wird danach automatisch transkribiert.
-          Anhören ist bereits jetzt möglich.
-        </p>
-      </section>
-    );
+  if (live && (status === "wartend" || status === "in_arbeit")) {
+    return <TranscriptionProgress recordingId={recordingId} initial={live} renderedAt={renderedAt} />;
   }
 
+  // Abgeschlossen, aber ohne Text (sollte nicht vorkommen): neutraler Hinweis statt Fortschritt.
   return (
-    <section className="card border-[#c6d9df] bg-petrol-soft p-5" role="status">
-      <h2 className="text-[14px] font-semibold text-petrol">
-        {status === "in_arbeit" ? "Transkription läuft" : "Transkription in der Warteschlange"}
-      </h2>
-      <p className="mt-1.5 text-[13px] leading-relaxed text-petrol">
-        Das deutsche Transkript mit Sprechertrennung und Zeitstempeln wird erstellt. Die Ansicht
-        aktualisiert sich automatisch, sobald es verfügbar ist. Die Aufnahme kann bereits jetzt
-        angehört werden.
-      </p>
-      {status === "wartend" && errorMessage && (
-        <p className="mt-1.5 text-[12.5px] leading-relaxed text-petrol">
-          Letzter Versuch nicht gelungen: {describeTranscriptionError(errorMessage).message}{" "}
-          {nextAttemptLabel
-            ? `Nächster automatischer Versuch am ${nextAttemptLabel} Uhr.`
-            : "Der nächste Versuch folgt automatisch."}
-        </p>
-      )}
-      <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/70">
-        <div className="h-full w-1/3 animate-pulse rounded-full bg-petrol" />
-      </div>
+    <section className="card p-5" role="status">
+      <p className="text-[13px] text-ink-soft">Für diese Aufnahme liegt kein Transkript vor.</p>
     </section>
   );
 }

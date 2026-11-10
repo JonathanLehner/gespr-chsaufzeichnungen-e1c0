@@ -21,6 +21,7 @@ import type {
   TranscriptionStatus,
 } from "./types";
 import { DEFAULT_SORT, type SortDir, type SortKey } from "./recording-sort";
+import { STATUS_VERSION_COLLECTION, STATUS_VERSION_ID } from "../../transcriber/shared/queue";
 
 export type { SortDir, SortKey } from "./recording-sort";
 
@@ -112,12 +113,35 @@ export async function createRecording(
 
 /* ------------------------------------------------------------------- Lesen */
 
-type CacheEntry = { at: number; rows: Recording[] };
+/**
+ * Kurzer Zwischenspeicher je Worker-Instanz für die vollständige Liste. Er
+ * gilt nur, solange der Versionsstempel in der Datenbank unverändert ist: Den
+ * erhöhen die Anwendung (`invalidateRecordingCache`) und der
+ * Transkriptionsdienst bei jeder Änderung an Status oder Fortschritt. So
+ * zeigt keine Instanz einen Status, den ein anderer Prozess längst geändert hat.
+ */
+type CacheEntry = { at: number; version: number; rows: Recording[] };
 const listCache = new Map<string, CacheEntry>();
 const CACHE_MS = 5_000;
 
-export function invalidateRecordingCache(): void {
+async function readStatusVersion(): Promise<number> {
+  const doc = await findById<{ value?: number }>(STATUS_VERSION_COLLECTION, STATUS_VERSION_ID);
+  return doc?.value ?? 0;
+}
+
+/** Verwirft den Zwischenspeicher aller Instanzen (Versionsstempel erhöhen). */
+export async function invalidateRecordingCache(): Promise<void> {
   listCache.clear();
+  await bumpStatusVersion();
+}
+
+export async function bumpStatusVersion(): Promise<void> {
+  await updateOne(
+    STATUS_VERSION_COLLECTION,
+    { _id: STATUS_VERSION_ID },
+    { $inc: { value: 1 }, $set: { at: new Date().toISOString() } },
+    { upsert: true },
+  );
 }
 
 /**
@@ -127,8 +151,9 @@ export function invalidateRecordingCache(): void {
  * und anschliessend serverseitig gefiltert, sortiert und paginiert.
  */
 async function loadAllRecordings(): Promise<Recording[]> {
+  const version = await readStatusVersion();
   const cached = listCache.get("all");
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.rows;
+  if (cached && cached.version === version && Date.now() - cached.at < CACHE_MS) return cached.rows;
 
   const total = await readCounter("recordings");
   const buckets = Math.min(Math.floor(Math.max(total - 1, 0) / BUCKET_SIZE) + 1, MAX_BUCKET_SCAN);
@@ -138,7 +163,7 @@ async function loadAllRecordings(): Promise<Recording[]> {
     ),
   );
   const rows = pages.flat();
-  listCache.set("all", { at: Date.now(), rows });
+  listCache.set("all", { at: Date.now(), version, rows });
   return rows;
 }
 
@@ -371,7 +396,7 @@ export async function setDeletionFlag(
       },
     },
   );
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
 }
 
 /** Endgültiges Löschen: Aufnahme, Transkript, Kommentare, Bewertungen, Auftrag. */
@@ -384,7 +409,7 @@ export async function hardDeleteRecording(recordingId: string): Promise<void> {
     deleteMany(Collections.ratings, { recordingId }),
     deleteById(Collections.jobs, recordingId),
   ]);
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
 }
 
 /* ------------------------------------------------- Kommentare & Bewertungen */
@@ -455,7 +480,7 @@ export async function refreshRatingSummary(recordingId: string): Promise<void> {
     { _id: recordingId },
     { $set: { ratingAverage: average, ratingCount: count } },
   );
-  invalidateRecordingCache();
+  await invalidateRecordingCache();
 }
 
 /* ---------------------------------------------------------------- Aufträge */

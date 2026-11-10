@@ -145,10 +145,12 @@ export async function updateOne(
   collection: string,
   filter: Record<string, unknown>,
   update: Record<string, unknown>,
+  options: { upsert?: boolean } = {},
 ): Promise<{ matched: number; modified: number }> {
   const result = await (await collectionOf(collection)).updateOne(
     filter as Filter<StoredDoc>,
     update as UpdateFilter<StoredDoc>,
+    options,
   );
   return { matched: result.matchedCount, modified: result.modifiedCount };
 }

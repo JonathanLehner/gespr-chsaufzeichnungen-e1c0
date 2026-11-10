@@ -60,7 +60,7 @@ npm install
 npm run dev      # Entwicklung
 npm run build    # Produktionsbuild
 npm run start    # Produktionsserver
-npm test         # Tests (Wiedergabe-Tokens)
+npm test         # Tests (Wiedergabe-Tokens, Fortschritt und Position)
 ```
 
 Erforderliche Variablen in `.env.local` (nicht im Repository enthalten):
@@ -243,8 +243,22 @@ Dienst bearbeitet also beide.
   Dienstes prüft `lockId`; ein Auftrag läuft deshalb nie doppelt, auch nicht über zwei Instanzen.
 - **Lebenszeichen**: alle 30 s erneuert ein laufender Auftrag `lockedAt`. Bleibt es drei Minuten
   aus (abgebrochener Container), übernimmt ein anderer Platz den Auftrag an der gespeicherten Stelle
-  (`progress`, je Abschnitt). Wird ein Auftrag mehr als zweimal verwaist vorgefunden, wird er mit
-  wachsender Pause zurückgestellt.
+  (`progress`, je Abschnitt). Verwaiste Aufträge werden vor allen wartenden übernommen (älteste
+  Sperre zuerst, `transcriber/claim.ts`). Massgeblich ist allein `lockedAt` (ISO-Text oder
+  BSON-Datum), auch ohne `workerId`/`lockId` wie bei Aufträgen aus der früheren Verarbeitung in der
+  Anfrage. Wird ein Auftrag mehr als zweimal verwaist vorgefunden, wird er mit wachsender Pause
+  zurückgestellt.
+- **Versionsstempel und Live-Stand**: Jede Änderung an Status, Fortschritt (je Abschnitt) oder
+  Lebenszeichen erhöht `settings/status_version` (Dienst und Anwendung). Die Liste der Aufnahmen
+  wird je Worker-Instanz höchstens 5 s und nur bei unverändertem Stempel zwischengespeichert. Ein
+  Durable Object (`worker/live-status.ts`, Binding `LIVE_STATUS`, Einstieg `worker/index.ts`) hält
+  die WebSockets angemeldeter Browser (`/api/live`, mit Hibernation) und liest den Stempel alle 3 s,
+  solange ein Browser verbunden ist; ohne Browser schliesst es die Datenbankverbindung. Die Seiten
+  `/aufnahmen`, `/aufnahmen/<id>` und `/admin/transkription` holen bei jeder neuen Version den
+  Stand frisch aus der Datenbank und laden sich neu; die Detailseite zeigt „Abschnitt 4 von 10 · ca.
+  3 Min. verbleibend“ (Zeit je Abschnitt gemessen aus `progressRunAt`/`progressRunDone`), das
+  letzte Lebenszeichen, beim Warten die Position und bei Pause oder Sperre den Grund. Ohne
+  Abschnittsfortschritt (eine einzige Anfrage) erscheint ein unbestimmter Balken mit Laufzeit.
 - **Wiederholung ohne Obergrenze**: Vorübergehende Fehler (Zeitüberschreitung, 5xx, Netzwerk,
   „keinen Abschnitt geantwortet“, Kostenlimit von Gemini) beenden einen Auftrag nie. Er bleibt
   `wartend` mit `nextAttemptAt` (2 min, verdoppelt, höchstens 30 min, ±10 %) und setzt an der
@@ -295,6 +309,7 @@ Prüfungen gegen eine Wegwerf-Datenbank (nie Produktion; die Sammlungen werden g
 
 ```bash
 TEST_MONGODB_URI="mongodb://localhost:27017/test?directConnection=true" npx tsx scripts/check-transcriber-claim.mts
+TEST_MONGODB_URI=... npx tsx scripts/check-legacy-reclaim.mts     # verwaiste Aufträge ohne workerId/lockId zuerst
 TEST_MONGODB_URI=... npx tsx scripts/check-gemini-limiter.mts
 TEST_MONGODB_URI=... npx tsx scripts/check-transcriber-retry.mts   # rund 4 min, zwei Instanzen gegen nachgebildeten Dienst
 TEST_MONGODB_URI=... npx tsx scripts/check-spending-block.mts      # rund 2 min: Kostenlimit-Sperre, Freigabe, Monatswechsel, Pause, Nach vorne, Grenzen

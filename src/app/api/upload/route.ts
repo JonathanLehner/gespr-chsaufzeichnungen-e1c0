@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
       uploadedByName: user.name,
       fingerprint,
     });
-    invalidateRecordingCache();
+    await invalidateRecordingCache();
 
     // Der Auftrag steht als „wartend“ in der Datenbank; abgearbeitet wird er
     // vom Transkriptionsdienst (`transcriber/`), nicht in dieser Anfrage.

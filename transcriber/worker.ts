@@ -26,7 +26,12 @@
  *    zwischen den Starts, Pause der ganzen Spur nach einer Störung.
  *  - Während ein Auftrag läuft, wird alle 30 s `lockedAt` erneuert. Fehlt das
  *    Lebenszeichen länger als drei Minuten, übernimmt ein anderer Platz den
- *    Auftrag an der gespeicherten Stelle (`progress`).
+ *    Auftrag an der gespeicherten Stelle (`progress`), vor allen wartenden.
+ *    Das gilt für jeden laufenden Auftrag mit altem `lockedAt`, auch ohne
+ *    `workerId`/`lockId` (frühere Verarbeitung in der Anfrage).
+ *  - Jede Änderung an Status, Fortschritt oder Lebenszeichen erhöht den
+ *    Versionsstempel `settings/status_version`; die Anwendung zeigt damit
+ *    immer den Stand der Datenbank.
  *  - Ohne offene Arbeit wartet ein Platz auf eine Änderung an `jobs`
  *    (Change Stream) oder bis zur nächsten bekannten Fälligkeit
  *    (Wiederholung, ablaufende Sperre) und fragt erst dann wieder.
@@ -55,6 +60,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { MongoClient, type ChangeStream, type Collection } from "mongodb";
+import { claimJob } from "./claim";
 import { AbortedWhileWaiting, GeminiLimiter, QueueHalted } from "./limiter";
 import { alignTranscript } from "./shared/forced-alignment";
 import {
@@ -63,9 +69,10 @@ import {
   LIMITER_ID,
   SETTINGS_LIMITS,
   STALE_LOCK_MS,
+  STATUS_VERSION_COLLECTION,
+  STATUS_VERSION_ID,
   WORKERS_COLLECTION,
   activeBlock,
-  claimableFilter,
   iso,
   isSpendingLimitError,
   isTransientError,
@@ -172,7 +179,22 @@ type Db = {
   index: Collection<{ _id: string }>;
   workers: Collection<WorkerDoc>;
   limiter: Collection<LimiterDoc>;
+  settings: Collection<{ _id: string; value?: number; at?: string }>;
 };
+
+/**
+ * Erhöht den Versionsstempel (`STATUS_VERSION_ID`). Die Anwendung erkennt
+ * daran geänderte Status und Fortschritte sofort, statt Zwischengespeichertes
+ * zu zeigen. Ein Fehler hier hält keinen Auftrag auf.
+ */
+function bumpStatusVersion(db: Db): Promise<void> {
+  return db.settings
+    .updateOne({ _id: STATUS_VERSION_ID }, { $inc: { value: 1 }, $set: { at: iso() } }, { upsert: true })
+    .then(
+      () => undefined,
+      (error) => log(`Versionsstempel nicht erhöht (${errorText(error)})`),
+    );
+}
 
 function env(name: string): string {
   const value = process.env[name];
@@ -366,18 +388,9 @@ async function msUntilNextDue(db: Db): Promise<number> {
 
 /* --------------------------------------------------------------- Übernahme */
 
-/**
- * Übernimmt einen fälligen Auftrag exklusiv: `findOneAndUpdate` prüft Filter
- * und setzt die Sperre in einem Schritt, zwei Plätze können denselben Auftrag
- * also nie gleichzeitig erhalten. Geliefert wird der Stand vor der Übernahme,
- * daran entscheidet sich, ob fortgesetzt oder neu begonnen wird.
- */
-async function claimNext(db: Db, lockId: string, newestFirst: boolean): Promise<JobDoc | null> {
-  return db.jobs.findOneAndUpdate(
-    claimableFilter(),
-    { $set: { status: "in_arbeit", lockedAt: iso(), lockId, workerId: WORKER_ID } },
-    { sort: { priority: -1, createdAt: newestFirst ? -1 : 1 }, returnDocument: "before" },
-  );
+/** Übernimmt einen fälligen Auftrag exklusiv, verwaiste zuerst (`claim.ts`). */
+function claimNext(db: Db, lockId: string, newestFirst: boolean): Promise<JobDoc | null> {
+  return claimJob(db.jobs, { lockId, workerId: WORKER_ID, newestFirst });
 }
 
 /* --------------------------------------------------------------- Audio */
@@ -552,7 +565,10 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     progressTotal: state?.chunkCount ?? null,
   });
 
-  const mirror = (fields: Record<string, unknown>) => db.recordings.updateOne({ _id: id }, { $set: fields });
+  const mirror = async (fields: Record<string, unknown>) => {
+    await db.recordings.updateOne({ _id: id }, { $set: fields });
+    await bumpStatusVersion(db);
+  };
 
   /** Endzustand: abgeschlossen, ohne Sprache oder endgültig fehlgeschlagen. */
   const finish = async (status: string, lastError: string | null = null) => {
@@ -561,6 +577,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
       $set: {
         status, finishedAt: closedAt, nextAttemptAt: null, lastError, permanent: status === "fehlgeschlagen",
         lockedAt: null, lockId: null, paused: null, staleClaims: 0, progressAt: null, priority: null,
+        progressRunAt: null, progressRunDone: null,
         ...progressFields(null),
       },
     });
@@ -684,7 +701,10 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
         if (result.matchedCount === 0) {
           lost = true;
           jobAbort.abort();
+          return;
         }
+        // Die Anzeige „zuletzt aktualisiert vor …“ folgt dem Lebenszeichen.
+        return bumpStatusVersion(db);
       })
       .catch((error) => log(`${id}: Lebenszeichen nicht geschrieben (${errorText(error)})`));
   }, HEARTBEAT_MS);
@@ -707,7 +727,15 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
     const pending = state.chunks
       .map((chunk, index) => (chunk === null && !state.failed.includes(index) ? index : -1))
       .filter((index) => index >= 0);
-    await db.jobs.updateOne(own, { $set: progressFields(state) });
+    // Beginn des Durchgangs: daraus misst die Anzeige die Zeit je Abschnitt.
+    await db.jobs.updateOne(own, {
+      $set: {
+        ...progressFields(state),
+        progressRunAt: iso(),
+        progressRunDone: state.chunks.filter(Boolean).length + state.failed.length,
+      },
+    });
+    await bumpStatusVersion(db);
 
     /** Letzte Störung eines Abschnitts; beendet den Lauf und stellt den Auftrag zurück. */
     let deferredBy: string | null = null;
@@ -763,6 +791,7 @@ async function processJob(db: Db, before: JobDoc, lockId: string): Promise<Outco
           $set: { ...progressFields(state), lockedAt: iso(), progressAt: iso() },
         });
         if (written.matchedCount === 0) throw new LockLost();
+        await bumpStatusVersion(db);
       }
     };
     await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, pending.length) }, chunkWorker));
@@ -923,6 +952,7 @@ async function requeueTransientFailures(db: Db): Promise<void> {
     { _id: { $in: ids }, transcriptionStatus: "fehlgeschlagen" },
     { $set: { transcriptionStatus: "wartend", transcriptionNextAttemptAt: at } },
   );
+  await bumpStatusVersion(db);
   log(`${ids.length} wegen vorübergehender Fehler beendete Aufträge wieder eingereiht.`);
 }
 
@@ -937,6 +967,7 @@ async function main() {
     index: database.collection("transcript_index"),
     workers: database.collection<WorkerDoc>(WORKERS_COLLECTION),
     limiter: database.collection<LimiterDoc>(LIMITER_COLLECTION),
+    settings: database.collection(STATUS_VERSION_COLLECTION),
   };
   limiter = new GeminiLimiter(db.limiter, WORKER_ID, {
     maxConcurrent: geminiConcurrency(),

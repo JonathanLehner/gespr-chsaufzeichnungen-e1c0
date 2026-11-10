@@ -48,9 +48,25 @@ export function lockIsFresh(lockedAt: string | null | undefined, now = Date.now(
 }
 
 /**
+ * Laufende Aufträge ohne frisches Lebenszeichen: abgebrochener Container,
+ * fehlende Sperre oder Aufträge aus der früheren Verarbeitung in der Anfrage
+ * (ohne `workerId` und `lockId`). Massgeblich ist allein `lockedAt`, auch
+ * wenn es als BSON-Datum statt als ISO-Text gespeichert ist.
+ */
+export function staleLockFilter(now = Date.now()): Record<string, unknown> {
+  return {
+    status: "in_arbeit",
+    $or: [
+      { lockedAt: null },
+      { lockedAt: { $type: "string", $lt: iso(now - STALE_LOCK_MS) } },
+      { lockedAt: { $type: "date", $lt: new Date(now - STALE_LOCK_MS) } },
+    ],
+  };
+}
+
+/**
  * Alle Aufträge, die ein Dienst jetzt übernehmen darf: wartende, deren
- * nächster Versuch fällig ist, und laufende ohne frisches Lebenszeichen
- * (abgebrochener Container) oder ohne Sperre (ältere, pausierte Aufträge).
+ * nächster Versuch fällig ist, und verwaiste laufende (`staleLockFilter`).
  * „fehlgeschlagen“ ist endgültig und wird nie automatisch übernommen.
  */
 export function claimableFilter(now = Date.now()): Record<string, unknown> {
@@ -58,12 +74,56 @@ export function claimableFilter(now = Date.now()): Record<string, unknown> {
   return {
     $or: [
       { status: "wartend", $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: at } }] },
-      {
-        status: "in_arbeit",
-        $or: [{ lockedAt: null }, { lockedAt: { $lt: iso(now - STALE_LOCK_MS) } }],
-      },
+      staleLockFilter(now),
     ],
   };
+}
+
+/* ------------------------------------------------------------ Stand für die Anzeige */
+
+/**
+ * Versionsstempel in `settings`: Jede Änderung an Status oder Fortschritt
+ * eines Auftrags erhöht `value` (Transkriptionsdienst und Anwendung). Die
+ * Anwendung verwirft daran ihren Zwischenspeicher und meldet Änderungen live
+ * an geöffnete Seiten.
+ */
+export const STATUS_VERSION_COLLECTION = "settings";
+export const STATUS_VERSION_ID = "status_version";
+
+/**
+ * Ungefähre Position eines wartenden Auftrags. Vorgezogene Aufträge kommen
+ * zuerst; danach wechseln die Plätze zwischen neuestem und ältestem fälligen
+ * Auftrag, die Warteschlange schrumpft also von beiden Enden.
+ */
+export function queuePosition(counts: { prioritizedAhead: number; older: number; newer: number }): number {
+  return counts.prioritizedAhead + 2 * Math.min(counts.older, counts.newer) + 1;
+}
+
+/** Fortschrittsfelder eines Auftrags, wie sie der Transkriptionsdienst schreibt. */
+export type ProgressFields = {
+  progressDone: number | null;
+  progressTotal: number | null;
+  /** Letzter gesicherter Abschnitt. */
+  progressAt: string | null;
+  /** Beginn des laufenden Durchgangs und bis dahin fertige Abschnitte. */
+  progressRunAt: string | null;
+  progressRunDone: number | null;
+};
+
+/** Gemessene Zeit je Abschnitt im laufenden Durchgang; `null`, solange keiner fertig ist. */
+export function msPerChunk(fields: ProgressFields): number | null {
+  const { progressDone, progressRunDone, progressAt, progressRunAt } = fields;
+  if (progressDone === null || progressRunDone === null || !progressAt || !progressRunAt) return null;
+  const chunks = progressDone - progressRunDone;
+  const ms = Date.parse(progressAt) - Date.parse(progressRunAt);
+  return chunks > 0 && ms > 0 ? ms / chunks : null;
+}
+
+/** Geschätzte Restzeit aus der gemessenen Zeit je Abschnitt. */
+export function remainingMs(fields: ProgressFields): number | null {
+  const perChunk = msPerChunk(fields);
+  if (perChunk === null || fields.progressTotal === null || fields.progressDone === null) return null;
+  return Math.max(0, fields.progressTotal - fields.progressDone) * perChunk;
 }
 
 /** Wartende Aufträge, deren nächster Versuch erst später fällig ist. */
