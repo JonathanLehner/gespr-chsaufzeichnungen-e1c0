@@ -22,9 +22,7 @@ transkribiert allein in einem Durchgang (kein Zwei-Pass, keine Kombination).
 - **gemini-3.5-transcribe**: nicht neu gestartet, sondern die Ergebnisse von Auftrag
   6af37fd2b70571a2e52d1579 (Varianten A–D) übernommen. Gezeigt wird die beste Variante (meiste
   behaltene Wörter ohne 9911). Der Lauf war nach 10 von 44 Anfragen stehen geblieben und wurde mit
-  seinem eigenen Skript fortgesetzt, das fertige Anfragen überspringt. Stand beim Schreiben: 37 von 44
-  Läufen fertig; 8334 B–D und 10980 A–D fehlen noch, weil das Tageskontingent für dieses Modell
-  (100 Anfragen je Tag) aufgebraucht ist. Die Spalte wird erneuert, wenn der Lauf fertig ist.
+  seinem eigenen Skript fortgesetzt, das fertige Anfragen überspringt. Alle 44 Läufe sind fertig.
 - **Preise** (USD je 1 Mio. Tokens, Ausgabe inkl. Denken): flash-lite 0,30/2,50; argon und carbon
   2/10 bis 30.11.2026, **4/20 ab 1.12.2026**; 3.8-flash 0,75/3,75 bis 31.12.2026, 1,50/7,50 ab
   1.1.2027; 3.5-transcribe 2/12.
@@ -35,12 +33,12 @@ Skripte: `scripts/vergleich-modelle.mts` (Lauf), `scripts/vergleich-modelle-beri
 
 | | 3.5-flash-lite (Standard) | 4-argon low | 4-carbon low | 3.8-flash low | 3.8-flash Standard | 3.5-transcribe |
 | --- | --- | --- | --- | --- | --- | --- |
-| Wörter ggü. gespeichert (ohne 9911) | 95 % | 106 % | 107 % | 104 % | 104 % | rund 60 % |
+| Wörter ggü. gespeichert (ohne 9911) | 95 % | 106 % | 107 % | 104 % | 104 % | 62 % |
 | Schweizerdeutsch (Lesecheck, 3 Fenster) | viele Fehler (32) | 2 | 2 | 4 | 2 | lückenhaft |
 | Sprecher mit Namen | 38 % der Bezeichnungen | 57 % | 57 % | 48 % | 54 % | keine |
 | Satzzeiten des Modells, Abstand zur Ausrichtung (Median) | 7,2 s | 1,7 s | 1,9 s | 1,0 s | 2,0 s | eigene Wortzeiten |
-| Kosten je Audiominute | $0.0029 | $0.016, ab 1.12. $0.032 | $0.016, ab 1.12. $0.033 | $0.0060, ab 2027 $0.012 | $0.030, ab 2027 $0.060 | $0.0045 |
-| Laufzeit je Audiominute | 2,9 s | 8,6 s | 9,3 s | 7,8 s | 45 s | 13 s |
+| Kosten je Audiominute | $0.0029 | $0.016, ab 1.12. $0.032 | $0.016, ab 1.12. $0.033 | $0.0060, ab 2027 $0.012 | $0.030, ab 2027 $0.060 | $0.0044 |
+| Laufzeit je Audiominute | 2,9 s | 8,6 s | 9,3 s | 7,8 s | 45 s | 12 s |
 | Ungültiges JSON / Zeitüberschreitung / Fehler | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0, 3 Anfragen über 120 s | 0 / 0 / 0 (429 wiederholt) |
 
 Mehr Wörter als die Referenz heisst hier nicht „erfunden“: Die Referenz lässt selbst Stellen aus
@@ -61,7 +59,7 @@ offen und sollte bestätigen, bevor das Standardmodell wechselt.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 10425, 0–30 s (Kundin Schweizerdeutsch) | 10 | 0 | 0 | 1 | 0 | 1 | 1 | fast alles fehlt |
 | 8028, 60–90 s (Kunde Schweizerdeutsch, schnell) | 10 | 1 | 0 | 0 | 0 | 2 | 0 | 6 |
-| 10980, 0–30 s (beide Schweizerdeutsch) | 12 | 1 | 0 | 1 | 0 | 1 | 1 | offen |
+| 10980, 0–30 s (beide Schweizerdeutsch) | 12 | 1 | 0 | 1 | 0 | 1 | 1 | 9 |
 | **Summe** | **32** | **2** | **0** | **2** | **0** | **4** | **2** | – |
 
 Typische Fehler von flash-lite in diesen Fenstern: „der Schlafer Uzo“ statt „Labruzzo“, „Frau Malte“
@@ -71,6 +69,10 @@ Sprecher: Der Anrufer heisst „Sprecher 1“, die Kundin „Valerio Labruzzo“
 3.8-flash geben dieselben Stellen fast wortgleich wieder. Strittig bleiben nur einzelne Namen
 („Rombach“ bei argon/carbon und im gespeicherten Transkript, „Rohrbach“ bei 3.8-flash; „Wälti“
 gegen „Welti“) und in 10980 „aus Örlikon“ (Standard-Denken, 3.8-flash) gegen „Zürcher“ (low).
+gemini-3.5-transcribe B im Fenster 10980: „Ja, grüss dich“ statt „Ja, das ist Wälti“, „Frau Walter“,
+„Der Schlabruzo“, „Eigenschaft“ statt „Liegenschaft“, „an der Frühstück denkt“ statt „an eine
+Veräusserung gedacht“; es fehlen „Wir sind Grundstückentwickler …“, „aufs 5 und aufs 3“, das „Ja“
+der Kundin und „ungeniert nachfragen“.
 
 Ausschnitte: `~/clawcorp-results/gespr-e1c0-models/clips/` (`10425_0-30s.wav`, `8028_60-90s.wav`,
 `10980_0-30s.wav`), die Texte aller Modelle je Fenster stehen am Ende der Tabellen.
@@ -149,10 +151,10 @@ Erzeugt mit `node scripts/vergleich-modelle-bericht.mjs` aus den Rohdaten in
 
 | Variante | Läufe | Wörter behalten, gesamt | Median |
 | --- | --- | --- | --- |
-| B Opus, de-DE | 8/10 (unvollständig) | 61 % | 71 % |
-| D Original, de-DE | 8/10 (unvollständig) | 56 % | 41 % |
-| C Original, ohne Sprache | 8/10 (unvollständig) | 56 % | 57 % |
-| A Opus, ohne Sprache | 9/10 (unvollständig) | 51 % | 55 % |
+| A Opus, ohne Sprache | 9/10 | 51 % | 55 % |
+| B Opus, de-DE | 9/10 | 62 % | 71 % |
+| C Original, ohne Sprache | 9/10 | 58 % | 64 % |
+| D Original, de-DE | 9/10 | 58 % | 41 % |
 
 Beste Variante: **B (Opus, de-DE)**.
 
@@ -160,13 +162,13 @@ Beste Variante: **B (Opus, de-DE)**.
 
 |  | 3.5-flash-lite minimal | 4-argon low | 4-argon Standard | 4-carbon low | 4-carbon Standard | 3.8-flash low | 3.8-flash Standard | 3.5-transcribe B |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Läufe ok | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 | 9/10 |
-| Wörter behalten gesamt (ohne 9911) | 95 % | 106 % | 107 % | 107 % | 106 % | 104 % | 104 % | 61 % |
+| Läufe ok | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 |
+| Wörter behalten gesamt (ohne 9911) | 95 % | 106 % | 107 % | 107 % | 106 % | 104 % | 104 % | 62 % |
 | je Gespräch Median / schlechtestes | 96 % / 89 % | 106 % / 99 % | 108 % / 98 % | 105 % / 101 % | 105 % / 101 % | 104 % / 98 % | 104 % / 97 % | 71 % / 5 % |
-| WER ggü. gespeichert, Mittel (ohne 9911) | 0.37 | 0.34 | 0.34 | 0.35 | 0.35 | 0.34 | 0.35 | 0.54 |
-| Tokens je Audiominute Audio / Text / Ausgabe / Denken | 1500 / 824 / 868 / 0 | 1802 / 1533 / 942 / 0 | 1802 / 1533 / 931 / 0 | 1802 / 1533 / 959 / 0 | 1802 / 1533 / 950 / 942 | 1500 / 824 / 907 / 231 | 1500 / 824 / 1405 / 6108 | 1500 / 1 / 117 / 0 |
+| WER ggü. gespeichert, Mittel (ohne 9911) | 0.37 | 0.34 | 0.34 | 0.35 | 0.35 | 0.34 | 0.35 | 0.53 |
+| Tokens je Audiominute Audio / Text / Ausgabe / Denken | 1500 / 824 / 868 / 0 | 1802 / 1533 / 942 / 0 | 1802 / 1533 / 931 / 0 | 1802 / 1533 / 959 / 0 | 1802 / 1533 / 950 / 942 | 1500 / 824 / 907 / 231 | 1500 / 824 / 1405 / 6108 | 1500 / 1 / 113 / 0 |
 | Kosten je Audiominute | $0.0029 | $0.0161 (bis 30.11.2026)<br>$0.0322 (ab 1.12.2026) | $0.0160 (bis 30.11.2026)<br>$0.0320 (ab 1.12.2026) | $0.0163 (bis 30.11.2026)<br>$0.0325 (ab 1.12.2026) | $0.0256 (bis 30.11.2026)<br>$0.0512 (ab 1.12.2026) | $0.0060 (bis 31.12.2026)<br>$0.0120 (ab 1.1.2027) | $0.0299 (bis 31.12.2026)<br>$0.0598 (ab 1.1.2027) | $0.0044 |
-| Laufzeit je Audiominute | 2.9 s | 8.6 s | 13.0 s | 9.3 s | 18.2 s | 7.8 s | 45.1 s | 13.1 s |
+| Laufzeit je Audiominute | 2.9 s | 8.6 s | 13.0 s | 9.3 s | 18.2 s | 7.8 s | 45.1 s | 12.4 s |
 | ungültiges JSON / Zeitüberschr. / Fehler | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
 | Anfragen über 120 s (Grenze im Dienst) | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 0 |
 | Abschnitte ohne Ergebnis | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -188,7 +190,7 @@ Beste Variante: **B (Opus, de-DE)**.
 | 3.8-flash low | ab 1.1.2027 | $0.0120 | $36.07 | $18.74 |
 | 3.8-flash Standard | bis 31.12.2026 | $0.0299 | $89.75 | $46.64 |
 | 3.8-flash Standard | ab 1.1.2027 | $0.0598 | $179.51 | $93.28 |
-| 3.5-transcribe B | aktuell | $0.0044 | $13.23 | $6.88 |
+| 3.5-transcribe B | aktuell | $0.0044 | $13.06 | $6.79 |
 
 ### Wörter behalten je Gespräch (gegenüber gespeichertem gemini-2.5-flash-Transkript)
 
@@ -203,8 +205,8 @@ Beste Variante: **B (Opus, de-DE)**.
 | 8116 (388) | 89 % (344) | 103 % (401) | 108 % (419) | 105 % (406) | 105 % (408) | 106 % (412) | 107 % (417) | 88 % (342) |
 | 8355 (262) | 97 % (255) | 108 % (284) | 110 % (287) | 109 % (285) | 108 % (283) | 103 % (270) | 104 % (272) | 71 % (186) |
 | 8486 (157) | 104 % (163) | 104 % (163) | 104 % (163) | 105 % (165) | 104 % (163) | 104 % (163) | 102 % (160) | 48 % (76) |
-| 8334 (110) | 105 % (115) | 114 % (125) | 114 % (125) | 114 % (125) | 116 % (128) | 115 % (126) | 111 % (122) | – |
-| 10980 (1009) | 92 % (927) | 111 % (1117) | 112 % (1129) | 112 % (1127) | 114 % (1154) | 109 % (1099) | 112 % (1126) | – |
+| 8334 (110) | 105 % (115) | 114 % (125) | 114 % (125) | 114 % (125) | 116 % (128) | 115 % (126) | 111 % (122) | 80 % (88) |
+| 10980 (1009) | 92 % (927) | 111 % (1117) | 112 % (1129) | 112 % (1127) | 114 % (1154) | 109 % (1099) | 112 % (1126) | 61 % (614) |
 
 ### Sprecher (Bezeichnungen wie gespeichert)
 
@@ -227,8 +229,8 @@ Bezeichnungen nach dem Zusammensetzen der 60-s-Abschnitte wie im Dienst (gleiche
 | 8116 (Hossain Mortazavi) | 3: Sprecher 1, Frau Roos, Sprecher 2 | 5: Frau Roos, Scholz, Frau Russ, Sprecher 2, Sprecher 1 | 5: Frau Roos, Scholz, Frau Russ, Sprecher 2, Sprecher 1 | 4: Frau Roos, Sprecher 2, Frau Russ, Sprecher 1 | 5: Frau Roos, Schoss, Frau Russ, Sprecher 2, Sprecher 1 | 6: Frau Roos, Hossain Mortazavi, Sprecher 3, Frau Hess, Sprecher 2, Sprecher 1 | 4: Frau Roos, Hossain, Sprecher 2, Sprecher 1 | 2 (nur Nummern) |
 | 8355 (Ivana Zivkovic) | 3: Sprecher 1, Ivana Zivkovic, Sprecher 2 | 4: Herr Pomes, Ivana Zivkovic, Sprecher 1, Sprecher 2 | 4: Herr Pommes, Ivana Zivkovic, Sprecher 1, Sprecher 2 | 4: Herr Pommes, Ivana Zivkovic, Sprecher 1, Sprecher 2 | 4: Herr Pomes, Ivana Zivkovic, Sprecher 1, Sprecher 2 | 4: Herr Thomas, Ivana Zivkovic, Sprecher 1, Sprecher 2 | 4: Herr Bommeli, Ivana Zivkovic, Sprecher 1, Sprecherin 2 | 2 (nur Nummern) |
 | 8486 (Ivana Zivkovic) | 3: Sprecher 1, Ivana Zivkovic, Sprecher 2 | 3: Sprecher 1, Sprecher 2, Ivana Zivkovic | 3: Sprecher 1, Sprecher 2, Ivana Zivkovic | 3: Sprecher 1, Sprecher 2, Ivana Zivkovic | 3: Sprecher 1, Sprecher 2, Ivana Zivkovic | 3: Sprecher 1, Sprecher 2, Ivana Zivkovic | 3: Sprecher 1, Sprecher 2, Ivana Zivkovic | 3 (nur Nummern) |
-| 8334 (Ivana Zivkovic) | 3: Sprecher 1, Ivana Zivkovic, Sprecher 2 | 3: Logel, Ivana Zivkovic, Sprecher 2 | 4: Frau Logel, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 4: Logel, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 4: Frau Laugel, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 4: Sprecher 1, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 3: Rochelle, Ivana Zivkovic, Sprecher 2 | – |
-| 10980 (Valerio Labruzzo) | 3: Sprecher 1, Valerio Labruzzo, Sprecher 2 | 5: Frau Wälti, Valerio Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Wälti, Valerio Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Wälti, Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Wälti, Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Welti, Valerio Labruzzo, Sprecher 1, Sprecher 2, Sprecherin 1 | 5: Frau Walti, Labruzzo, Sprecher 1, Sprecher 2, Frau Asti | – |
+| 8334 (Ivana Zivkovic) | 3: Sprecher 1, Ivana Zivkovic, Sprecher 2 | 3: Logel, Ivana Zivkovic, Sprecher 2 | 4: Frau Logel, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 4: Logel, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 4: Frau Laugel, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 4: Sprecher 1, Ivana Zivkovic, Frau Zivkovic, Sprecher 2 | 3: Rochelle, Ivana Zivkovic, Sprecher 2 | 2 (nur Nummern) |
+| 10980 (Valerio Labruzzo) | 3: Sprecher 1, Valerio Labruzzo, Sprecher 2 | 5: Frau Wälti, Valerio Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Wälti, Valerio Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Wälti, Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Wälti, Labruzzo, Sprecher 1, Sprecher 2, Frau Marti | 5: Frau Welti, Valerio Labruzzo, Sprecher 1, Sprecher 2, Sprecherin 1 | 5: Frau Walti, Labruzzo, Sprecher 1, Sprecher 2, Frau Asti | 2+2 (nur Nummern) |
 
 ### Namen und Begriffe
 
@@ -245,8 +247,8 @@ Immotrust: richtig geschrieben / Varianten; Labruzzo: richtig / Varianten; Stras
 | 8116 | Immotrust 0; Zugerstrasse | Immotrust 1; Zugerstraße | Immotrust 1; Zugerstrasse | Immotrust 1; Zugerstrasse | Immotrust 1; Zugerstrasse | Immotrust 1; Zugerstrasse | Immotrust 1; Zürcherstrasse | Immotrust 1; Zugerstrasse | Immotrust 1; Zugerstraße |
 | 8355 | Immotrust 0 | Immotrust 1 | Immotrust 1 | Immotrust 1 | Immotrust 1 | Immotrust 1 | Immotrust 1 | Immotrust 1 | Immotrust 0 |
 | 8486 | Immotrust 0 | Immotrust 0 | Immotrust 0 | Immotrust 0 | Immotrust 0 | Immotrust 0 | Immotrust 0 | Immotrust 0 | Immotrust 0 |
-| 8334 | Immotrust 0 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | – |
-| 10980 | Immotrust 0 (Immo Trust); Labruzzo 1; Grundstrasse, Kunzstrasse | Immotrust 1; Grundstraße | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse, Molkenrain | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse | – |
+| 8334 | Immotrust 0 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 2 | Immotrust 0 |
+| 10980 | Immotrust 0 (Immo Trust); Labruzzo 1; Grundstrasse, Kunzstrasse | Immotrust 1; Grundstraße | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse, Molkenrain | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 1; Grundstrasse | Immotrust 1; Labruzzo 0 (Schlabruzo); Grundstraße |
 
 ### Satzzeiten des Modells vor dem Forced Alignment (alle 11 Gespräche)
 
@@ -295,9 +297,9 @@ Keine.
 
 > 1.1 s [Frau Walti] Ja, hier Walti. · 2.8 s [Labruzzo] Ja, guten Tag, Frau Walti. · 4.3 s [Labruzzo] Hier ist Labruzzo von der Firma Immotrust am Telefon. · 7.9 s [Frau Walti] Ja? · 9.1 s [Labruzzo] Wir sind Grundstücksentwickler, sozusagen, und wir schauen uns gerade so spannende Grundstücke an in Knonau. · 15.3 s [Labruzzo] Jetzt bin ich auf die Grundstrasse gestossen, auf die 5 und natürlich auch auf die 3. · 20.1 s [Frau Walti] Ja. · 21.2 s [Labruzzo] Da habe ich einfach mal ganz ungeniert nachfragen wollen, ob Sie vielleicht selber gewisse Pläne haben mit der Liegenschaft, oder ob wir Ihnen mal ein Angebot machen dürfen, vielleicht mal an eine Veräusserung gedacht? · 31.0 s [Labruzzo] Wie sieht denn das aus, wenn ich da frage? · 33.6 s [Frau Walti] Ja, ich weiss es selber noch nicht recht, was... · 37.7 s [Labruzzo] Okay. · 39.2 s [Labruzzo] Aber sind Sie gut zuweg, sind Sie gut beieinander, dass... · 42.2 s [Frau Walti] Nein, ich bin eigentlich schon noch gut zuweg, ja. · 44.3 s [Labruzzo] Und da denke ich mal, wird wahrscheinlich das Ziel sein, einfach möglichst lange drinnen zu bleiben, solange alles gut... · 48.4 s [Frau Walti] Ja, ja, ja. · 50.0 s [Frau Walti] Ja, genau, genau. · 51.7 s [Frau Walti] Gut, das kann schnell anders sein, oder? · 54.3 s [Labruzzo] Ja, wünscht man sich natürlich nicht, ja. · 56.3 s [Frau Walti] Nein, aber ja. · 58.9 s [Labruzzo] Was wäre denn so...
 
-**3.5-transcribe B**
+**3.5-transcribe B** (614 Wörter gesamt, 61 %)
 
-> kein Ergebnis
+> 1.2 s [Sprecher 1] Ja, grüß dich. · 2.9 s [Sprecher 2] Ja, grüß dich, Frau Walter. · 4.2 s [Sprecher 2] Der Schlabruzo von der Firma Immotrust am Telefon. · 8.5 s [Sprecher 1] Ja. · 14.7 s [Sprecher 2] In Knonau jetzt bin ich auf Grundstraße gestoßen und natürlich auch vielleicht selber gewisse Plan haben mit der Eigenschaft oder ob wir ihnen mal das Angebot dürfte machen, vielleicht mal an der Frühstück denkt. · 31.4 s [Sprecher 2] Wie gesagt, die das muss ich Ihnen ja fragen. · 34.0 s [Sprecher 1] Ja, ich weiß es selber noch nicht Okay, aber sind der gut Und da denke ich mal, Ja, ja, ja. · 50.8 s [Sprecher 1] Ja, genau, genau. · 51.9 s [Sprecher 1] Gut, das kann schnell anders ziehen oder · 54.6 s [Sprecher 2] Ja, wünsch mir sich natürlich nicht, ja, aber · 58.2 s [Sprecher 1] Ja.
 
 ### Abhör-Fenster (Text je Modell, Sätze mit Beginn im Fenster, Modellzeiten)
 
@@ -332,6 +334,6 @@ Keine.
 - **4-carbon Standard**: [Frau Wälti] Ja, das ist Wälti. [Labruzzo] Ja, grüß Sie Frau Wälti, das ist Labruzzo von der Firma Immotrust am Telefon. [Frau Wälti] Ja? [Labruzzo] Wir sind Grundstückentwickler aus Örlikon. [Labruzzo] Wir schauen jetzt gerade so ein paar spannende Grundstücke an in Knonau. [Labruzzo] Jetzt bin ich auf die Grundstrasse gestoßen, aufs Fünf und natürlich auch aufs Drei. [Frau Wälti] Ja. [Labruzzo] Jetzt habe ich einfach mal ganz ungeniert nachfragen wollen, ob Sie vielleicht selber gewisse Pläne haben mit der Liegenschaft oder ob man Ihnen mal ein Angebot machen dürfte, falls Sie mal an eine Veräusserung denken.
 - **3.8-flash low**: [Frau Welti] Ja, das Welti. [Valerio Labruzzo] Ja, grüsse Sie, Frau Welti, da ist Labruzzo von der Firma Immotrust am Telefon. [Frau Welti] Ja? [Valerio Labruzzo] Wir sind Grundstückentwickler aus Oerlikon und wir schauen ab und zu die Grundstücke an. [Valerio Labruzzo] In Knonau jetzt bin ich auf Grundstrasse gestossen, aufs 5 und natürlich aufs 3. [Frau Welti] Ja. [Valerio Labruzzo] Da habe ich einfach mal ganz ungeniert wollen nachfragen, ob ihr vielleicht selber gewisse Pläne habt mit der Liegenschaft oder ob man Ihnen mal ein Angebot dürfte machen. [Valerio Labruzzo] Vielleicht mal an eine Veräusserung gedacht?
 - **3.8-flash Standard**: [Frau Walti] Ja, hier Walti. [Labruzzo] Ja, guten Tag, Frau Walti. [Labruzzo] Hier ist Labruzzo von der Firma Immotrust am Telefon. [Frau Walti] Ja? [Labruzzo] Wir sind Grundstücksentwickler, sozusagen, und wir schauen uns gerade so spannende Grundstücke an in Knonau. [Labruzzo] Jetzt bin ich auf die Grundstrasse gestossen, auf die 5 und natürlich auch auf die 3. [Frau Walti] Ja. [Labruzzo] Da habe ich einfach mal ganz ungeniert nachfragen wollen, ob Sie vielleicht selber gewisse Pläne haben mit der Liegenschaft, oder ob wir Ihnen mal ein Angebot machen dürfen, vielleicht mal an eine Veräusserung gedacht?
-- **3.5-transcribe B**: kein Ergebnis
+- **3.5-transcribe B**: [Sprecher 1] Ja, grüß dich. [Sprecher 2] Ja, grüß dich, Frau Walter. [Sprecher 2] Der Schlabruzo von der Firma Immotrust am Telefon. [Sprecher 1] Ja. [Sprecher 2] In Knonau jetzt bin ich auf Grundstraße gestoßen und natürlich auch vielleicht selber gewisse Plan haben mit der Eigenschaft oder ob wir ihnen mal das Angebot dürfte machen, vielleicht mal an der Frühstück denkt.
 
 <!-- tabellen:end -->
